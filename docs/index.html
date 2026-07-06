@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <script async src="https://busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
 
-  <meta name="title" content="Offline Supervision for RL in VLA Models">
-  <meta name="description" content="Hybrid offline–online RL fine-tuning of OpenVLA LoRA adapters with RefKL and DataBC on the RL4VLA benchmark.">
+  <meta name="title" content="Leveraging Offline Supervision for Efficient and Generalizable RL in VLA Models">
+  <meta name="description" content="Hybrid offline-online RL fine-tuning of OpenVLA LoRA adapters with RefKL and DataBC on the RL4VLA benchmark.">
   <meta name="keywords" content="Vision-Language-Action, VLA, robotics, reinforcement learning, offline supervision, PPO, OpenVLA, RL4VLA">
   <meta name="author" content="Dmitriy Poyarkov, Aleksei Staroverov, Aleksandr I. Panov">
   <meta name="robots" content="index, follow">
@@ -14,23 +14,23 @@
 
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="Offline Supervision for RL in VLA Models">
-  <meta property="og:title" content="Offline Supervision for Reinforcement Learning in VLA Models">
+  <meta property="og:title" content="Leveraging Offline Supervision for Efficient and Generalizable Reinforcement Learning in Large-Scale Vision-Language-Action Models">
   <meta property="og:description" content="Guided PPO reaches standard RL performance with roughly half the online training budget while preserving OOD generalization.">
   <meta property="og:url" content="https://alstar8.github.io/offline-supervision-vla-rl/">
-  <meta property="og:image" content="https://alstar8.github.io/offline-supervision-vla-rl/static/images/teaser.svg">
+  <meta property="og:image" content="https://alstar8.github.io/offline-supervision-vla-rl/static/images/idea2.png">
 
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Offline Supervision for RL in VLA Models">
+  <meta name="twitter:title" content="Leveraging Offline Supervision for RL in VLA Models">
   <meta name="twitter:description" content="RefKL and DataBC guided PPO for efficient OpenVLA RL fine-tuning.">
-  <meta name="twitter:image" content="https://alstar8.github.io/offline-supervision-vla-rl/static/images/teaser.svg">
+  <meta name="twitter:image" content="https://alstar8.github.io/offline-supervision-vla-rl/static/images/idea2.png">
 
-  <meta name="citation_title" content="Offline Supervision for Reinforcement Learning in VLA Models">
+  <meta name="citation_title" content="Leveraging Offline Supervision for Efficient and Generalizable Reinforcement Learning in Large-Scale Vision-Language-Action Models">
   <meta name="citation_author" content="Poyarkov, Dmitriy">
   <meta name="citation_author" content="Staroverov, Aleksei">
   <meta name="citation_author" content="Panov, Aleksandr I.">
   <meta name="citation_publication_date" content="2026">
 
-  <title>Offline Supervision for RL in VLA Models</title>
+  <title>Offline Supervision for RL in VLA Models | Project Page</title>
 
   <base href="/offline-supervision-vla-rl/">
 
@@ -197,9 +197,36 @@
       white-space: pre-wrap;
     }
 
+    .publication-title {
+      font-size: 2.15rem;
+      line-height: 1.18;
+      max-width: 980px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .figure-img {
+      width: 100%;
+      height: auto;
+      display: block;
+      margin: 0 auto;
+      border-radius: 12px;
+    }
+
+    .plot-grid {
+      display: grid;
+      gap: 1rem;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin: 1rem 0;
+    }
+
     @media (max-width: 768px) {
       .publication-title {
-        font-size: 2rem !important;
+        font-size: 1.65rem !important;
+      }
+
+      .plot-grid {
+        grid-template-columns: 1fr;
       }
 
       .stat-grid,
@@ -225,7 +252,7 @@
           <div class="columns is-centered">
             <div class="column has-text-centered">
               <p class="paper-kicker">ICML 2026 Workshop</p>
-              <h1 class="title is-1 publication-title">Offline Supervision for Reinforcement Learning in VLA Models</h1>
+              <h1 class="title is-1 publication-title">Leveraging Offline Supervision for Efficient and Generalizable Reinforcement Learning in Large-Scale Vision-Language-Action Models</h1>
               <div class="is-size-5 publication-authors">
                 <span class="author-block">Dmitriy Poyarkov<sup>1</sup>,</span>
                 <span class="author-block">Aleksei Staroverov<sup>1,2</sup>,</span>
@@ -275,9 +302,9 @@
     <section class="hero teaser">
       <div class="container is-max-desktop" style="max-width: 980px;">
         <div class="hero-body" style="padding-top: 1rem; padding-bottom: 1rem;">
-          <img src="static/images/teaser.svg" alt="Hybrid offline-online RL overview" style="width: 100%; height: auto; display: block; margin: 0 auto; border-radius: 12px;">
+          <img src="static/images/idea2.png" alt="Core idea of combining offline and online training" class="figure-img" loading="eager">
           <p class="figure-caption">
-            <strong>Hybrid offline–online RL fine-tuning.</strong> Offline supervision is incorporated directly into the PPO objective via a frozen SFT reference policy (RefKL) or offline demonstrations (DataBC), improving sample efficiency while preserving out-of-distribution generalization.
+            <strong>Hybrid offline-online training.</strong> The core idea of combining offline supervision with online RL fine-tuning: offline guidance is added directly to the PPO objective via RefKL or DataBC, not only as initialization.
           </p>
         </div>
       </div>
@@ -319,9 +346,13 @@
     <section class="section hero is-light" id="method">
       <div class="container is-max-desktop content">
         <h2 class="title is-3">Method</h2>
-        <img src="static/images/method.svg" alt="RefKL and DataBC guided PPO pipelines" style="width: 100%; border-radius: 12px; display: block; margin: 0 auto;">
+        <img src="static/images/openvla_architecture.png" alt="OpenVLA architecture used in our setting" class="figure-img" loading="lazy">
         <p class="figure-caption">
-          <strong>Guided PPO variants.</strong> RefKL penalizes KL divergence to a frozen SFT reference on the RL minibatch. DataBC adds behavior cloning on offline demonstrations. Both use the same β schedule: constant until 100k steps, linear decay to zero by 300k, then pure PPO.
+          <strong>OpenVLA architecture.</strong> Architecture of the OpenVLA model used in our setting, consistent with the base OpenVLA model and the RL4VLA value-head modification.
+        </p>
+        <img src="static/images/algs_scheme.png" alt="RefKL and DataBC guided PPO pipelines" class="figure-img" loading="lazy">
+        <p class="figure-caption">
+          <strong>Guided PPO pipelines.</strong> Training pipelines for PPO modifications used in our experiments: RefKL (KL to a frozen SFT reference) and DataBC (behavior cloning on offline demonstrations). Both use a curriculum on the regularization weight beta.
         </p>
         <p>
           All methods fine-tune a zero-initialized LoRA adapter on top of frozen OpenVLA-warmup with the RL4VLA value-head modification. Training uses <code>PutOnPlateInScene25Main-v3</code>; evaluation covers 64 IND episodes and 960 OOD episodes across vision, language, and action shifts.
@@ -367,16 +398,29 @@
     <section class="section hero is-light" id="training">
       <div class="container is-max-desktop content">
         <h2 class="title is-3">Training Dynamics</h2>
-        <img src="static/images/training_curves.svg" alt="IND and OOD training curves" style="width: 100%; border-radius: 12px; display: block; margin: 0 auto;">
+        <div class="plot-grid">
+          <img src="static/images/train_ind.png" alt="In-distribution training curves" class="figure-img" loading="lazy">
+          <img src="static/images/train_ood.png" alt="Out-of-distribution training curves" class="figure-img" loading="lazy">
+        </div>
         <p class="figure-caption">
-          <strong>Learning curves on RL4VLA.</strong> Guided variants reach higher IND and OOD success earlier than standard PPO. RefKL remains the most consistent guided method across training.
+          <strong>Training curves on RL4VLA.</strong> In-distribution and out-of-distribution success over environment steps. Dashed lines indicate final PPO performance at 2M steps. Guided variants reach higher success earlier than standard PPO; RefKL is the most consistent method.
         </p>
         <div class="insight-grid">
           <p><strong>Optimization prior:</strong> offline guidance stabilizes early RL when the on-policy signal is still weak.</p>
           <p><strong>RefKL vs DataBC:</strong> reference-policy KL is a smoother regularizer than fixed-dataset BC.</p>
-          <p><strong>Curriculum on β:</strong> strong initial guidance with decay outperforms a constant auxiliary weight.</p>
+          <p><strong>Curriculum on beta:</strong> strong initial guidance with decay outperforms a constant auxiliary weight.</p>
           <p><strong>No trade-off:</strong> faster training does not sacrifice OOD capability in this setting.</p>
         </div>
+      </div>
+    </section>
+
+    <section class="section" id="benchmark">
+      <div class="container is-max-desktop content">
+        <h2 class="title is-3">Benchmark &amp; Evaluation</h2>
+        <img src="static/images/rl4vla_images.png" alt="RL4VLA in-distribution and OOD scenes" class="figure-img" loading="lazy">
+        <p class="figure-caption">
+          <strong>RL4VLA evaluation environments.</strong> Top: an in-distribution scene used during training. Bottom: examples of out-of-distribution scenes with vision, language, and action shifts.
+        </p>
       </div>
     </section>
 
@@ -390,7 +434,7 @@
           </button>
         </div>
         <pre id="bibtex-code"><code>@misc{poyarkov2026offline,
-  title={Offline Supervision for Reinforcement Learning in {VLA} Models},
+  title={Leveraging Offline Supervision for Efficient and Generalizable Reinforcement Learning in Large-Scale Vision-Language-Action Models},
   author={Poyarkov, Dmitriy and Staroverov, Aleksei and Panov, Aleksandr I.},
   howpublished={ICML 2026 Workshop on Decision-Making from Offline Datasets to Online Adaptation: Black-Box Optimization to Reinforcement Learning},
   year={2026}

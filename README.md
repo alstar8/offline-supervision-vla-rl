@@ -1,6 +1,6 @@
 # Offline Supervision for Reinforcement Learning in VLA Models
 
-Code release for **Offline Supervision for Reinforcement Learning in VLA Models**, accepted at the ICML 2026 workshop [Decision-Making from Offline Datasets to Online Adaptation: Black-Box Optimization to Reinforcement Learning](https://icml.cc/).
+Code release for **Leveraging Offline Supervision for Efficient and Generalizable Reinforcement Learning in Large-Scale Vision-Language-Action Models**, accepted at the ICML 2026 workshop [Decision-Making from Offline Datasets to Online Adaptation: Black-Box Optimization to Reinforcement Learning](https://icml.cc/).
 
 **Project page:** [https://alstar8.github.io/offline-supervision-vla-rl/](https://alstar8.github.io/offline-supervision-vla-rl/)
 
@@ -181,7 +181,7 @@ If you use this code, please cite our paper and the RL4VLA benchmark:
 
 ```bibtex
 @misc{poyarkov2026offline,
-  title={Offline Supervision for Reinforcement Learning in {VLA} Models},
+  title={Leveraging Offline Supervision for Efficient and Generalizable Reinforcement Learning in Large-Scale Vision-Language-Action Models},
   author={Poyarkov, Dmitriy and Staroverov, Aleksei and Panov, Aleksandr I.},
   howpublished={ICML 2026 Workshop on Decision-Making from Offline Datasets to Online Adaptation: Black-Box Optimization to Reinforcement Learning},
   year={2026}
