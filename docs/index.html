@@ -220,6 +220,49 @@
       margin: 1rem 0;
     }
 
+    .method-block {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      margin: 1.25rem 0;
+      padding: 1.1rem 1.25rem;
+    }
+
+    .method-block h3 {
+      color: #0f172a;
+      font-size: 1.15rem;
+      font-weight: 700;
+      margin-bottom: 0.65rem;
+    }
+
+    .eq-block {
+      background: #fff;
+      border-left: 4px solid #0891b2;
+      border-radius: 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.92rem;
+      line-height: 1.6;
+      margin: 0.75rem 0;
+      overflow-x: auto;
+      padding: 0.85rem 1rem;
+    }
+
+    .content ul.method-list {
+      margin-left: 1.25rem;
+      margin-top: 0.75rem;
+    }
+
+    .content ul.method-list li {
+      margin-bottom: 0.45rem;
+    }
+
+    .subsection-title {
+      color: #0891b2;
+      font-size: 1.25rem;
+      font-weight: 700;
+      margin: 1.5rem 0 0.75rem;
+    }
+
     @media (max-width: 768px) {
       .publication-title {
         font-size: 1.65rem !important;
@@ -333,29 +376,102 @@
 
     <section class="section" id="motivation">
       <div class="container is-max-desktop content">
-        <h2 class="title is-3">Why Hybrid Offline–Online RL?</h2>
+        <h2 class="title is-3">Why Hybrid Offline-Online RL?</h2>
         <p>
-          RL fine-tuning of OpenVLA LoRA adapters improves OOD behavior relative to SFT, but standard PPO needs on the order of <strong>2M environment steps</strong> to reach strong in-distribution (IND) and OOD performance. Initializing PPO from an SFT adapter helps early on, yet adaptation remains slow when offline and online signals are not combined in the objective.
+          Vision-language-action (VLA) policies can be trained offline from fixed demonstration datasets or online through environment interaction. In practice, online RL often produces stronger final policies and better out-of-distribution (OOD) behavior, but at substantially higher cost. Offline SFT remains cheaper and easier to deploy, yet struggles under distribution shift.
         </p>
         <p>
-          We ask whether offline supervision can be used not only for initialization, but as a <strong>structured training signal</strong> during RL optimization. Both guided variants add an auxiliary loss to PPO with a curriculum on the regularization weight β, allowing the policy to transition from guided learning to pure RL.
+          Recent work on RL4VLA showed that PPO fine-tuning of OpenVLA LoRA adapters can improve OOD performance relative to SFT, but requires much more expensive online training. This raises a practical question: in parameter-efficient VLA adaptation, can offline supervision be used not only for initialization, but as a structured signal inside the RL objective?
+        </p>
+        <p>
+          We study two guided PPO variants and one natural baseline:
+        </p>
+        <ul class="method-list">
+          <li><strong>RefKL</strong> &mdash; PPO regularized toward a frozen SFT reference policy via a KL penalty.</li>
+          <li><strong>DataBC</strong> &mdash; PPO augmented with behavior cloning on the offline demonstration dataset.</li>
+          <li><strong>PPO SFT-init</strong> &mdash; standard PPO initialized from the SFT LoRA without explicit guidance during RL.</li>
+        </ul>
+        <p>
+          Our central finding is that offline guidance acts as an effective <strong>optimization prior</strong>: guided methods improve over standard PPO at the same online budget, and RefKL reaches nearly the same operating point as a much longer PPO run while using far fewer environment interactions, without sacrificing OOD capability.
         </p>
       </div>
     </section>
 
-    <section class="section hero is-light" id="method">
+    <section class="section hero is-light" id="task">
+      <div class="container is-max-desktop content">
+        <h2 class="title is-3">Task &amp; Setup</h2>
+        <p>
+          We model control as a partially observable Markov decision process (POMDP). At each step the agent observes an RGB image and a natural-language instruction that remains fixed within an episode. The policy predicts tokenized actions that are converted by the environment wrapper into executed robot commands.
+        </p>
+        <ul class="method-list">
+          <li><strong>Horizon:</strong> fixed episode length of <code>T = 80</code> steps.</li>
+          <li><strong>Reward:</strong> sparse difference-based signal derived from task progress.</li>
+          <li><strong>Backbone:</strong> frozen OpenVLA-warmup with a zero-initialized LoRA adapter (rank 32).</li>
+          <li><strong>RL head:</strong> RL4VLA value-head modification for PPO training.</li>
+          <li><strong>Training env:</strong> <code>PutOnPlateInScene25Main-v3</code> on the RL4VLA benchmark.</li>
+          <li><strong>SFT reference:</strong> early-stopped checkpoint trained on 2k demonstrations for 7.5k steps.</li>
+        </ul>
+        <p>
+          All methods share the same architecture and RL hyperparameters; only the training objective differs. This isolates the effect of offline supervision design rather than changes to the experimental protocol.
+        </p>
+      </div>
+    </section>
+
+    <section class="section" id="method">
       <div class="container is-max-desktop content">
         <h2 class="title is-3">Method</h2>
+        <p>
+          During training we keep the base VLA frozen and optimize only a LoRA module attached to the policy network. The methods below differ solely in their objectives and the data used during optimization.
+        </p>
+
         <img src="static/images/openvla_architecture.png" alt="OpenVLA architecture used in our setting" class="figure-img" loading="lazy">
         <p class="figure-caption">
           <strong>OpenVLA architecture.</strong> Architecture of the OpenVLA model used in our setting, consistent with the base OpenVLA model and the RL4VLA value-head modification.
         </p>
+
+        <p class="subsection-title">Supervised Fine-Tuning (SFT)</p>
+        <p>
+          We first train a policy on offline demonstrations by maximizing the likelihood of expert actions. The resulting LoRA checkpoint serves either as a frozen reference policy (RefKL) or as an initialization point for PPO SFT-init.
+        </p>
+        <div class="eq-block">L_SFT(&theta;) = - E_{(o, a*) ~ D_off} [ log &pi;_&theta;(a* | o) ]</div>
+
+        <p class="subsection-title">Proximal Policy Optimization (PPO)</p>
+        <p>
+          Standard PPO is our baseline online RL algorithm. The clipped surrogate objective optimizes the policy from on-policy rollouts while a value head estimates advantages.
+        </p>
+        <div class="eq-block">L_PPO(&theta;) = E_t [ min( r_t(&theta;) &Acirc;_t, clip(r_t(&theta;), 1-&epsilon;, 1+&epsilon;) &Acirc;_t ) ]</div>
+        <p>
+          where <code>r_t(&theta;) = &pi;_&theta;(a_t|o_t) / &pi;_&theta;old(a_t|o_t)</code> is the probability ratio and <code>&Acirc;_t</code> is the advantage estimate.
+        </p>
+
         <img src="static/images/algs_scheme.png" alt="RefKL and DataBC guided PPO pipelines" class="figure-img" loading="lazy">
         <p class="figure-caption">
-          <strong>Guided PPO pipelines.</strong> Training pipelines for PPO modifications used in our experiments: RefKL (KL to a frozen SFT reference) and DataBC (behavior cloning on offline demonstrations). Both use a curriculum on the regularization weight beta.
+          <strong>Guided PPO pipelines.</strong> Training pipelines for PPO modifications used in our experiments: RefKL (KL to a frozen SFT reference) and DataBC (behavior cloning on offline demonstrations).
         </p>
+
+        <p class="subsection-title">RefKL: Reference-Policy Guidance</p>
         <p>
-          All methods fine-tune a zero-initialized LoRA adapter on top of frozen OpenVLA-warmup with the RL4VLA value-head modification. Training uses <code>PutOnPlateInScene25Main-v3</code>; evaluation covers 64 IND episodes and 960 OOD episodes across vision, language, and action shifts.
+          RefKL regularizes the current policy toward a frozen SFT reference on the same RL minibatch by penalizing KL divergence. This preserves SFT action preferences while still allowing on-policy adaptation.
+        </p>
+        <div class="eq-block">L(&theta;) = L_PPO(&theta;) + &beta; &middot; KL( &pi;_ref(&middot;|o) || &pi;_&theta;(&middot;|o) )</div>
+
+        <p class="subsection-title">DataBC: Offline Dataset Guidance</p>
+        <p>
+          DataBC augments PPO with a behavior-cloning loss on offline demonstrations sampled from the SFT dataset. This directly injects expert transitions into RL optimization.
+        </p>
+        <div class="eq-block">L(&theta;) = L_PPO(&theta;) + &beta; &middot; ( - E_{(o,a*)~D_off} [ log &pi;_&theta;(a*|o) ] )</div>
+
+        <p class="subsection-title">Regularization Curriculum</p>
+        <p>
+          Rather than keeping the auxiliary weight fixed, we use a simple curriculum that gradually removes offline guidance as training progresses:
+        </p>
+        <ul class="method-list">
+          <li><strong>0 &ndash; 100k steps:</strong> constant &beta;<sub>0</sub> = 0.6</li>
+          <li><strong>100k &ndash; 300k steps:</strong> linear decay of &beta; to 0</li>
+          <li><strong>after 300k steps:</strong> pure PPO</li>
+        </ul>
+        <p>
+          The same schedule is used for both RefKL and DataBC. Ablation experiments show that stronger initial guidance helps and that the curriculum outperforms a constant-&beta; schedule.
         </p>
       </div>
     </section>
@@ -392,6 +508,33 @@
         <p class="figure-caption">
           <strong>Main benchmark results on RL4VLA.</strong> RefKL at 1M steps matches 2M-step PPO on average OOD success while using half the online interaction budget.
         </p>
+
+        <p class="subsection-title">Comparison at Equal 1M-Step Budget</p>
+        <p>
+          At the same online training budget, both guided variants outperform plain PPO on IND and all OOD categories. PPO initialized directly from the SFT LoRA starts from a much stronger checkpoint but improves surprisingly slowly and remains below both guided methods by 1M steps. Notably, SFT-init is relatively strong on vision and language OOD but weaker on action OOD, suggesting that fitting the supervised distribution more strongly can make execution-level adaptation under RL alone more difficult.
+        </p>
+
+        <p class="subsection-title">Beta Ablation (RefKL)</p>
+        <p>
+          We vary the initial regularization strength &beta;<sub>0</sub> under the curriculum schedule and compare against a constant-&beta; variant. Stronger auxiliary supervision consistently improves both IND and OOD success; the curriculum schedule also works better than keeping &beta; fixed throughout training.
+        </p>
+        <div class="result-table">
+          <table>
+            <thead>
+              <tr>
+                <th>&beta;</th>
+                <th>IND</th>
+                <th>OOD Avg</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>0.1</td><td>0.68</td><td>0.52</td></tr>
+              <tr><td>0.3</td><td>0.82</td><td>0.63</td></tr>
+              <tr><td class="best">0.6 (curriculum)</td><td class="best">0.93</td><td class="best">0.77</td></tr>
+              <tr><td>0.6 (constant)</td><td>0.86</td><td>0.75</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </section>
 
@@ -417,9 +560,30 @@
     <section class="section" id="benchmark">
       <div class="container is-max-desktop content">
         <h2 class="title is-3">Benchmark &amp; Evaluation</h2>
+        <p>
+          All experiments follow the RL4VLA evaluation protocol. Each checkpoint is evaluated with three evaluation seeds. We report 64 in-distribution episodes and 960 out-of-distribution episodes in total (64 episodes for each of 15 OOD environments). OOD settings are grouped into vision, language, and action shifts; reported success rates are averaged across evaluation and training seeds.
+        </p>
         <img src="static/images/rl4vla_images.png" alt="RL4VLA in-distribution and OOD scenes" class="figure-img" loading="lazy">
         <p class="figure-caption">
           <strong>RL4VLA evaluation environments.</strong> Top: an in-distribution scene used during training. Bottom: examples of out-of-distribution scenes with vision, language, and action shifts.
+        </p>
+      </div>
+    </section>
+
+    <section class="section hero is-light" id="analysis">
+      <div class="container is-max-desktop content">
+        <h2 class="title is-3">Analysis &amp; Takeaways</h2>
+        <p>
+          The main empirical result is that offline-guided RL reaches the performance of a much longer PPO run while using substantially fewer online environment interactions, consistently across both IND and OOD metrics.
+        </p>
+        <div class="insight-grid">
+          <p><strong>Complementary signals.</strong> Offline supervision and RL are not competing alternatives in this setting. SFT knowledge stabilizes and accelerates early optimization, while RL remains essential for strong final OOD behavior.</p>
+          <p><strong>Optimization prior.</strong> During early RL, the on-policy signal is weak and exploration is inefficient. Offline guidance provides task-relevant structure before sparse reward alone becomes informative.</p>
+          <p><strong>RefKL &gt; DataBC.</strong> Reference-policy KL is a smoother regularizer than fixed-dataset BC and stays more consistently above standard PPO throughout training.</p>
+          <p><strong>Initialization is not enough.</strong> Starting from SFT helps, but explicit guidance during RL is needed for the best sample-efficiency and final performance.</p>
+        </div>
+        <p style="margin-top: 1.25rem;">
+          Among the variants considered, <strong>RefKL with strong initial guidance and curriculum decay</strong> is the most effective and consistent formulation. It improves the viability of RL fine-tuning for large-scale VLA policies by reducing expensive online interaction while preserving the main advantages of RL over offline-only training.
         </p>
       </div>
     </section>
