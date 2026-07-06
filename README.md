@@ -2,6 +2,8 @@
 
 Code release for **Offline Supervision for Reinforcement Learning in VLA Models**, accepted at the ICML 2026 workshop [Decision-Making from Offline Datasets to Online Adaptation: Black-Box Optimization to Reinforcement Learning](https://icml.cc/).
 
+**Project page:** [https://alstar8.github.io/offline-supervision-vla-rl/](https://alstar8.github.io/offline-supervision-vla-rl/)
+
 This repository implements hybrid offline–online RL fine-tuning of OpenVLA LoRA adapters on the RL4VLA benchmark ([Liu et al., 2025](https://arxiv.org/abs/2505.19789)).
 
 ## Overview

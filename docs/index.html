@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script async src="https://busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+
+  <meta name="title" content="Offline Supervision for RL in VLA Models">
+  <meta name="description" content="Hybrid offline–online RL fine-tuning of OpenVLA LoRA adapters with RefKL and DataBC on the RL4VLA benchmark.">
+  <meta name="keywords" content="Vision-Language-Action, VLA, robotics, reinforcement learning, offline supervision, PPO, OpenVLA, RL4VLA">
+  <meta name="author" content="Dmitriy Poyarkov, Aleksei Staroverov, Aleksandr I. Panov">
+  <meta name="robots" content="index, follow">
+  <meta name="language" content="English">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="Offline Supervision for RL in VLA Models">
+  <meta property="og:title" content="Offline Supervision for Reinforcement Learning in VLA Models">
+  <meta property="og:description" content="Guided PPO reaches standard RL performance with roughly half the online training budget while preserving OOD generalization.">
+  <meta property="og:url" content="https://alstar8.github.io/offline-supervision-vla-rl/">
+  <meta property="og:image" content="https://alstar8.github.io/offline-supervision-vla-rl/static/images/teaser.svg">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Offline Supervision for RL in VLA Models">
+  <meta name="twitter:description" content="RefKL and DataBC guided PPO for efficient OpenVLA RL fine-tuning.">
+  <meta name="twitter:image" content="https://alstar8.github.io/offline-supervision-vla-rl/static/images/teaser.svg">
+
+  <meta name="citation_title" content="Offline Supervision for Reinforcement Learning in VLA Models">
+  <meta name="citation_author" content="Poyarkov, Dmitriy">
+  <meta name="citation_author" content="Staroverov, Aleksei">
+  <meta name="citation_author" content="Panov, Aleksandr I.">
+  <meta name="citation_publication_date" content="2026">
+
+  <title>Offline Supervision for RL in VLA Models</title>
+
+  <link rel="icon" type="image/x-icon" href="static/images/favicon.ico">
+  <link rel="apple-touch-icon" href="static/images/icon.png">
+  <link rel="stylesheet" href="static/css/bulma.min.css">
+  <link rel="stylesheet" href="static/css/index.css">
+  <link rel="preload" href="static/css/bulma-carousel.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+  <link rel="preload" href="static/css/bulma-slider.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+  <link rel="preload" href="static/css/fontawesome.all.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+  <link rel="preload" href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1/css/academicons.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+  <noscript>
+    <link rel="stylesheet" href="static/css/bulma-carousel.min.css">
+    <link rel="stylesheet" href="static/css/bulma-slider.min.css">
+    <link rel="stylesheet" href="static/css/fontawesome.all.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1/css/academicons.min.css">
+  </noscript>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+
+  <script defer src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+  <script defer src="static/js/fontawesome.all.min.js"></script>
+  <script defer src="static/js/bulma-carousel.min.js"></script>
+  <script defer src="static/js/bulma-slider.min.js"></script>
+  <script defer src="static/js/index.js"></script>
+
+  <style>
+    :root {
+      --primary-color: #0891b2;
+      --primary-hover: #0e7490;
+    }
+
+    .paper-kicker {
+      color: #0891b2;
+      font-weight: 800;
+      letter-spacing: 0;
+      margin-bottom: 1rem;
+      text-transform: uppercase;
+    }
+
+    .workshop-note {
+      color: #475569;
+      font-size: 1rem;
+      margin-top: 0.75rem;
+      max-width: 820px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .stat-grid {
+      display: grid;
+      gap: 1rem;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin: 1.5rem 0 0;
+    }
+
+    .stat-card {
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgb(15 23 42 / 0.06);
+      padding: 1rem;
+      text-align: center;
+    }
+
+    .stat-card strong {
+      color: #1e293b;
+      display: block;
+      font-size: 1.55rem;
+      line-height: 1.1;
+    }
+
+    .stat-card span {
+      color: #64748b;
+      display: block;
+      font-size: 0.92rem;
+      margin-top: 0.35rem;
+    }
+
+    .figure-caption {
+      color: #555;
+      font-size: 0.9rem;
+      line-height: 1.45;
+      margin: 0.65rem auto 1.5rem;
+      max-width: 95%;
+      text-align: left;
+    }
+
+    .result-table {
+      font-size: 0.88rem;
+      margin: 1.25rem 0;
+      overflow-x: auto;
+    }
+
+    .result-table table {
+      background: #fff;
+      border-collapse: collapse;
+      min-width: 760px;
+      width: 100%;
+    }
+
+    .result-table th,
+    .result-table td {
+      border-bottom: 1px solid #e2e8f0;
+      padding: 0.55rem 0.65rem;
+      text-align: center;
+      vertical-align: middle;
+    }
+
+    .result-table th:first-child,
+    .result-table td:first-child {
+      text-align: left;
+    }
+
+    .result-table thead th {
+      color: #1e293b;
+      font-weight: 800;
+    }
+
+    .result-table .best {
+      color: #0f766e;
+      font-weight: 800;
+    }
+
+    .insight-grid {
+      display: grid;
+      gap: 0.85rem;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin-top: 1rem;
+    }
+
+    .insight-grid p {
+      background: #f8fafc;
+      border-left: 4px solid #0891b2;
+      border-radius: 8px;
+      margin: 0;
+      padding: 0.85rem 1rem;
+    }
+
+    .bibtex-header {
+      align-items: center;
+      display: flex;
+      gap: 1rem;
+      justify-content: space-between;
+    }
+
+    .copy-bibtex-btn {
+      align-items: center;
+      background: #1e293b;
+      border: 0;
+      border-radius: 8px;
+      color: white;
+      cursor: pointer;
+      display: inline-flex;
+      font-weight: 700;
+      gap: 0.45rem;
+      padding: 0.7rem 1rem;
+    }
+
+    .copy-bibtex-btn:hover {
+      background: #0891b2;
+    }
+
+    pre {
+      white-space: pre-wrap;
+    }
+
+    @media (max-width: 768px) {
+      .publication-title {
+        font-size: 2rem !important;
+      }
+
+      .stat-grid,
+      .insight-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .hero-body {
+        padding: 2.5rem 1rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <button class="scroll-to-top" onclick="window.scrollTo({top:0, behavior:'smooth'})" title="Scroll to top" aria-label="Scroll to top">
+    <i class="fas fa-chevron-up"></i>
+  </button>
+
+  <main id="main-content">
+    <section class="hero">
+      <div class="hero-body">
+        <div class="container is-max-desktop">
+          <div class="columns is-centered">
+            <div class="column has-text-centered">
+              <p class="paper-kicker">ICML 2026 Workshop</p>
+              <h1 class="title is-1 publication-title">Offline Supervision for Reinforcement Learning in VLA Models</h1>
+              <div class="is-size-5 publication-authors">
+                <span class="author-block">Dmitriy Poyarkov<sup>1</sup>,</span>
+                <span class="author-block">Aleksei Staroverov<sup>1,2</sup>,</span>
+                <span class="author-block"><a href="https://grafft.github.io/" target="_blank">Aleksandr I. Panov</a><sup>1,2</sup></span>
+              </div>
+              <div class="is-size-6 publication-authors">
+                <span class="author-block"><sup>1</sup>AXXX</span>
+                <span class="author-block"><sup>2</sup>MIRAI</span>
+              </div>
+              <p class="workshop-note">
+                Accepted at <strong>Decision-Making from Offline Datasets to Online Adaptation: Black-Box Optimization to Reinforcement Learning</strong>
+              </p>
+
+              <div class="column has-text-centered">
+                <div class="publication-links">
+                  <span class="link-block">
+                    <a href="https://github.com/alstar8/offline-supervision-vla-rl" target="_blank" class="external-link button is-normal is-rounded is-dark">
+                      <span class="icon"><i class="fab fa-github"></i></span>
+                      <span>Code</span>
+                    </a>
+                  </span>
+                  <span class="link-block">
+                    <a href="https://icml.cc/" target="_blank" class="external-link button is-normal is-rounded is-dark">
+                      <span class="icon"><i class="fas fa-university"></i></span>
+                      <span>Workshop</span>
+                    </a>
+                  </span>
+                  <span class="link-block" style="margin-top: 4.5px; display: inline-block;">
+                    <span class="button is-normal is-rounded is-dark" style="cursor: default; pointer-events: none;">
+                      Views:&nbsp;<span id="busuanzi_value_page_pv">Loading</span>
+                    </span>
+                  </span>
+                  <span class="link-block">
+                    <a href="#BibTeX" class="external-link button is-normal is-rounded is-dark">
+                      <span class="icon"><i class="fas fa-quote-right"></i></span>
+                      <span>BibTeX</span>
+                    </a>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="hero teaser">
+      <div class="container is-max-desktop" style="max-width: 980px;">
+        <div class="hero-body" style="padding-top: 1rem; padding-bottom: 1rem;">
+          <img src="static/images/teaser.svg" alt="Hybrid offline-online RL overview" style="width: 100%; height: auto; display: block; margin: 0 auto; border-radius: 12px;">
+          <p class="figure-caption">
+            <strong>Hybrid offline–online RL fine-tuning.</strong> Offline supervision is incorporated directly into the PPO objective via a frozen SFT reference policy (RefKL) or offline demonstrations (DataBC), improving sample efficiency while preserving out-of-distribution generalization.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section hero is-light">
+      <div class="container is-max-desktop">
+        <div class="columns is-centered has-text-centered">
+          <div class="column is-four-fifths">
+            <h2 class="title is-3">Abstract</h2>
+            <div class="content has-text-justified">
+              <p>
+                Online reinforcement learning (RL) can substantially improve vision–language–action (VLA) policies, especially under out-of-distribution (OOD) shifts, but requires costly environment interaction. Offline supervised fine-tuning (SFT) is cheaper yet OOD-limited. We study hybrid offline–online training that regularizes PPO with offline supervision from either a frozen SFT reference policy (RefKL) or offline demonstration data (DataBC). On the RL4VLA benchmark with LoRA-based OpenVLA adaptation, guided methods preserve strong OOD capability while reaching performance close to standard RL with roughly half the online training budget. Reference-policy guidance is the most consistent variant, showing that offline supervision acts as an effective optimization prior rather than merely a better initialization.
+              </p>
+            </div>
+            <div class="stat-grid">
+              <div class="stat-card"><strong>RefKL</strong><span>KL to frozen SFT policy</span></div>
+              <div class="stat-card"><strong>DataBC</strong><span>Offline BC auxiliary loss</span></div>
+              <div class="stat-card"><strong>~2×</strong><span>fewer online steps</span></div>
+              <div class="stat-card"><strong>OOD</strong><span>generalization preserved</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="motivation">
+      <div class="container is-max-desktop content">
+        <h2 class="title is-3">Why Hybrid Offline–Online RL?</h2>
+        <p>
+          RL fine-tuning of OpenVLA LoRA adapters improves OOD behavior relative to SFT, but standard PPO needs on the order of <strong>2M environment steps</strong> to reach strong in-distribution (IND) and OOD performance. Initializing PPO from an SFT adapter helps early on, yet adaptation remains slow when offline and online signals are not combined in the objective.
+        </p>
+        <p>
+          We ask whether offline supervision can be used not only for initialization, but as a <strong>structured training signal</strong> during RL optimization. Both guided variants add an auxiliary loss to PPO with a curriculum on the regularization weight β, allowing the policy to transition from guided learning to pure RL.
+        </p>
+      </div>
+    </section>
+
+    <section class="section hero is-light" id="method">
+      <div class="container is-max-desktop content">
+        <h2 class="title is-3">Method</h2>
+        <img src="static/images/method.svg" alt="RefKL and DataBC guided PPO pipelines" style="width: 100%; border-radius: 12px; display: block; margin: 0 auto;">
+        <p class="figure-caption">
+          <strong>Guided PPO variants.</strong> RefKL penalizes KL divergence to a frozen SFT reference on the RL minibatch. DataBC adds behavior cloning on offline demonstrations. Both use the same β schedule: constant until 100k steps, linear decay to zero by 300k, then pure PPO.
+        </p>
+        <p>
+          All methods fine-tune a zero-initialized LoRA adapter on top of frozen OpenVLA-warmup with the RL4VLA value-head modification. Training uses <code>PutOnPlateInScene25Main-v3</code>; evaluation covers 64 IND episodes and 960 OOD episodes across vision, language, and action shifts.
+        </p>
+      </div>
+    </section>
+
+    <section class="section" id="results">
+      <div class="container is-max-desktop content">
+        <h2 class="title is-3">Results</h2>
+        <p>
+          At an equal budget of <strong>1M environment steps</strong>, both guided variants outperform plain PPO. RefKL reaches IND <strong>0.93</strong> and average OOD <strong>0.77</strong>, matching the final <strong>2M-step</strong> PPO checkpoint (IND 0.92, OOD 0.77).
+        </p>
+        <div class="result-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Method</th>
+                <th>Steps</th>
+                <th>IND</th>
+                <th>OOD Act</th>
+                <th>OOD Lang</th>
+                <th>OOD Vis</th>
+                <th>OOD Avg</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>SFT</td><td>—</td><td>0.82</td><td>0.46</td><td>0.60</td><td>0.74</td><td>0.62</td></tr>
+              <tr><td>PPO</td><td>1M</td><td>0.75</td><td>0.67</td><td>0.62</td><td>0.65</td><td>0.64</td></tr>
+              <tr><td>PPO SFT-init</td><td>1M</td><td>0.87</td><td>0.51</td><td>0.69</td><td>0.78</td><td>0.69</td></tr>
+              <tr><td>PPO RefKL</td><td>1M</td><td class="best">0.93</td><td class="best">0.79</td><td class="best">0.76</td><td>0.76</td><td class="best">0.77</td></tr>
+              <tr><td>PPO DataBC</td><td>1M</td><td>0.91</td><td>0.74</td><td>0.73</td><td>0.74</td><td>0.74</td></tr>
+              <tr><td>PPO</td><td>2M</td><td>0.92</td><td>0.82</td><td>0.75</td><td>0.76</td><td>0.77</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="figure-caption">
+          <strong>Main benchmark results on RL4VLA.</strong> RefKL at 1M steps matches 2M-step PPO on average OOD success while using half the online interaction budget.
+        </p>
+      </div>
+    </section>
+
+    <section class="section hero is-light" id="training">
+      <div class="container is-max-desktop content">
+        <h2 class="title is-3">Training Dynamics</h2>
+        <img src="static/images/training_curves.svg" alt="IND and OOD training curves" style="width: 100%; border-radius: 12px; display: block; margin: 0 auto;">
+        <p class="figure-caption">
+          <strong>Learning curves on RL4VLA.</strong> Guided variants reach higher IND and OOD success earlier than standard PPO. RefKL remains the most consistent guided method across training.
+        </p>
+        <div class="insight-grid">
+          <p><strong>Optimization prior:</strong> offline guidance stabilizes early RL when the on-policy signal is still weak.</p>
+          <p><strong>RefKL vs DataBC:</strong> reference-policy KL is a smoother regularizer than fixed-dataset BC.</p>
+          <p><strong>Curriculum on β:</strong> strong initial guidance with decay outperforms a constant auxiliary weight.</p>
+          <p><strong>No trade-off:</strong> faster training does not sacrifice OOD capability in this setting.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="BibTeX">
+      <div class="container is-max-desktop content">
+        <div class="bibtex-header">
+          <h2 class="title">BibTeX</h2>
+          <button class="copy-bibtex-btn" onclick="navigator.clipboard.writeText(document.getElementById('bibtex-code').innerText)" title="Copy BibTeX to clipboard">
+            <i class="fas fa-copy"></i>
+            <span>Copy</span>
+          </button>
+        </div>
+        <pre id="bibtex-code"><code>@misc{poyarkov2026offline,
+  title={Offline Supervision for Reinforcement Learning in {VLA} Models},
+  author={Poyarkov, Dmitriy and Staroverov, Aleksei and Panov, Aleksandr I.},
+  howpublished={ICML 2026 Workshop on Decision-Making from Offline Datasets to Online Adaptation: Black-Box Optimization to Reinforcement Learning},
+  year={2026}
+}</code></pre>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      <div class="columns is-centered">
+        <div class="column is-8">
+          <div class="content">
+            <p>
+              This page was built using the <a href="https://github.com/eliahuhorwitz/Academic-project-page-template" target="_blank">Academic Project Page Template</a> adopted from the <a href="https://nerfies.github.io" target="_blank">Nerfies</a> project page. Design inspired by <a href="https://tttonyalpha.github.io/vla_grounder/" target="_blank">VLA Grounder</a>.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>

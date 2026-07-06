@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 520" role="img" aria-label="RefKL and DataBC training pipelines">
+  <rect width="1200" height="520" rx="18" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="600" y="38" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="700" fill="#0f172a">Guided PPO Variants</text>
+
+  <text x="300" y="72" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="700" fill="#0891b2">RefKL</text>
+  <text x="900" y="72" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="700" fill="#0891b2">DataBC</text>
+
+  <rect x="70" y="95" width="460" height="360" rx="16" fill="#ffffff" stroke="#e2e8f0"/>
+  <rect x="670" y="95" width="460" height="360" rx="16" fill="#ffffff" stroke="#e2e8f0"/>
+
+  <!-- RefKL flow -->
+  <rect x="110" y="130" width="160" height="56" rx="10" fill="#dbeafe" stroke="#2563eb"/>
+  <text x="190" y="162" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="600">Minibatch</text>
+  <rect x="110" y="220" width="160" height="56" rx="10" fill="#fef3c7" stroke="#d97706"/>
+  <text x="190" y="252" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="600">OpenVLA + LoRA</text>
+  <rect x="330" y="220" width="160" height="56" rx="10" fill="#e0e7ff" stroke="#6366f1"/>
+  <text x="410" y="245" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="12" font-weight="600">Frozen SFT</text>
+  <text x="410" y="262" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="12" font-weight="600">reference</text>
+  <rect x="110" y="320" width="160" height="48" rx="10" fill="#dcfce7" stroke="#16a34a"/>
+  <text x="190" y="350" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="600">PPO loss</text>
+  <rect x="330" y="320" width="160" height="48" rx="10" fill="#fce7f3" stroke="#db2777"/>
+  <text x="410" y="350" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="600">KL aux loss</text>
+  <rect x="220" y="400" width="160" height="40" rx="10" fill="#0891b2" stroke="#0e7490"/>
+  <text x="300" y="426" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="700" fill="#ffffff">Joint update</text>
+
+  <!-- DataBC flow -->
+  <rect x="710" y="130" width="160" height="56" rx="10" fill="#dbeafe" stroke="#2563eb"/>
+  <text x="790" y="162" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="600">Minibatch</text>
+  <rect x="710" y="220" width="160" height="56" rx="10" fill="#fef3c7" stroke="#d97706"/>
+  <text x="790" y="252" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="600">OpenVLA + LoRA</text>
+  <rect x="930" y="220" width="160" height="56" rx="10" fill="#ffedd5" stroke="#ea580c"/>
+  <text x="1010" y="252" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="600">Offline batch</text>
+  <rect x="710" y="320" width="160" height="48" rx="10" fill="#dcfce7" stroke="#16a34a"/>
+  <text x="790" y="350" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="600">PPO loss</text>
+  <rect x="930" y="320" width="160" height="48" rx="10" fill="#fce7f3" stroke="#db2777"/>
+  <text x="1010" y="350" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="600">BC aux loss</text>
+  <rect x="820" y="400" width="160" height="40" rx="10" fill="#0891b2" stroke="#0e7490"/>
+  <text x="900" y="426" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="700" fill="#ffffff">Joint update</text>
+
+  <text x="600" y="505" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="13" fill="#64748b">L = L_PPO + ²(t) · L_aux, with ² held constant until 100k steps, linear decay to 0 by 300k</text>
+</svg>
