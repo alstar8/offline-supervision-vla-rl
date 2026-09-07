@@ -1,0 +1,137 @@
+{
+  "background": {
+    "registered": "/app/assets/scenes/airi_table_new_empty3_image/simulation/background_registered.glb",
+    "collision": "/app/assets/scenes/airi_table_new_empty3_image/simulation/background_registered_collision.glb"
+  },
+  "groundplane_in_cam": {
+    "point": [
+      -0.07526764273643494,
+      0.18763259053230286,
+      0.6903666853904724
+    ],
+    "normal": [
+      -0.00029131975126512043,
+      -0.8087081904975436,
+      -0.5882099776040789
+    ]
+  },
+  "groundplane_in_sim": {
+    "point": [
+      0.03909544519360189,
+      -0.7376107555777762,
+      0.2587954751005809
+    ],
+    "normal": [
+      -8.763238995143383e-12,
+      1.1230307628296149e-08,
+      1.0
+    ]
+  },
+  "camera": {
+    "camera_heading_wxyz": [
+      0.45375654998759707,
+      -0.891125631040131,
+      0.00032100884944258334,
+      -0.0
+    ],
+    "camera_position": [
+      0.11426930303985106,
+      -1.18559168103605,
+      0.8165941385016781
+    ],
+    "camera_opencv_to_world": [
+      [
+        0.9999997939066377,
+        -0.0005721184270579759,
+        0.0002913197360771086,
+        0.11426930303985106
+      ],
+      [
+        -0.0005721184270579759,
+        -0.5882097805933436,
+        0.8087081838925808,
+        -1.18559168103605
+      ],
+      [
+        -0.0002913197360771086,
+        -0.8087081838925808,
+        -0.5882099866867064,
+        0.8165941385016781
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "width": 1916.0,
+    "height": 1076.0,
+    "fx": 866.3036499023438,
+    "fy": 866.3035888671875,
+    "cx": 958.0,
+    "cy": 538.0
+  },
+  "objects": {
+    "1": {
+      "oid": 1,
+      "name": "sheet",
+      "object_center": [
+        0.5885866673459964,
+        -0.5835649221512649,
+        0.2782034469715797
+      ],
+      "object_min": [
+        0.5329402685165405,
+        -0.7037888169288635,
+        0.2607954740524292
+      ],
+      "object_max": [
+        0.686428964138031,
+        -0.4609949588775635,
+        0.34193894267082214
+      ],
+      "optimized": "/app/assets/scenes/airi_table_new_empty3_image/simulation/1_sheet_optimized.glb",
+      "fdpose_trajs": "/app/assets/scenes/airi_table_new_empty3_image/simulation/1_sheet_trajs.npy",
+      "simple_trajs": "/app/assets/scenes/airi_table_new_empty3_image/simulation/1_sheet_simple_trajs.npy",
+      "hybrid_trajs": "/app/assets/scenes/airi_table_new_empty3_image/simulation/1_sheet_hybrid_trajs.npy",
+      "fdpose_trajs_recomputed": "/app/assets/scenes/airi_table_new_empty3_image/simulation/1_sheet_trajs_recomputed.npy",
+      "simple_trajs_recomputed": "/app/assets/scenes/airi_table_new_empty3_image/simulation/1_sheet_simple_trajs_recomputed.npy",
+      "hybrid_trajs_recomputed": "/app/assets/scenes/airi_table_new_empty3_image/simulation/1_sheet_hybrid_trajs_recomputed.npy",
+      "type": "manipulated",
+      "final_trajs": "/app/assets/scenes/airi_table_new_empty3_image/simulation/1_final_traj.npy",
+      "end_mesh": "/app/assets/scenes/airi_table_new_empty3_image/simulation/1_sheet_end.glb",
+      "grasp_point": null,
+      "grasp_direction": null,
+      "grasps": "/app/assets/scenes/airi_table_new_empty3_image/grasps/1_sheet_grasp.npz"
+    }
+  },
+  "aabb": {
+    "scene_min": [
+      -1.8281852158079763,
+      -0.9603901133787561,
+      -0.7518062116504879
+    ],
+    "scene_max": [
+      1.8281852158079763,
+      0.9603901133787562,
+      0.7518062116504879
+    ]
+  },
+  "scene_mesh": {
+    "optimized": "/app/assets/scenes/airi_table_new_empty3_image/simulation/scene_optimized.glb"
+  },
+  "background_image": "/app/assets/scenes/airi_table_new_empty3_image/simulation/background.png",
+  "manipulated_oid": "1",
+  "traj_key": "fdpose_trajs_recomputed",
+  "gripper_closed": true,
+  "chosen_indices": [
+    0
+  ],
+  "start_related": [],
+  "end_related": [],
+  "task_type": "simple_pick",
+  "task_desc": [
+    "Pick up the sheet."
+  ]
+}

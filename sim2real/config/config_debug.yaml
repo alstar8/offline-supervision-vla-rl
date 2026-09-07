@@ -1,0 +1,472 @@
+keys:
+  - airi_table_new_empty3_image
+
+global:
+  simulation:
+    physics: "default"
+    object_material:
+      static_friction: 0.5
+      dynamic_friction: 0.5
+      restitution: 0.0
+    lighting:
+      # настройки общего света, у настроек в local преимущество
+      # Равномерная фоновая засветка всей сцены.
+      # Если кадр в целом слишком темный или слишком контрастный, сначала менять именно это.
+      ambient_light: [0.35, 0.35, 0.35]
+
+      # Цвет "пустого" фона рендера там, где нет геометрии.
+      # На нашу сцену влияет слабо, но полезен для согласованности viewer/rgb_array.
+      clear_color: [0.62, 0.62, 0.62, 1.0]
+
+      # Направленный свет по всей сцене.
+      # Сейчас отключен, потому что для этой tabletop-сцены лучше работает локальный верхний свет.
+      directional_lights: []
+
+      point_lights:
+        # Основной источник света над столом.
+        # Имитирует потолочную лампу над рабочей зоной.
+        # shadow: true нужен, чтобы получить тени и сделать картинку ближе к реальной.
+        - position: [-0.10, -1.15, 1.60]
+          color: [1.2, 1.2, 1.2]
+          shadow: true
+
+        # Слабый заполняющий свет.
+        # Немного подсвечивает сцену сбоку и смягчает слишком жесткие тени.
+        # Обычно его лучше держать без теней.
+        - position: [0.35, -0.95, 1.40]
+          color: [0.45, 0.45, 0.45]
+          shadow: false
+    video:
+      # Параметры записи debug-видео из base_camera.
+      #
+      # Быстрый локальный просмотр, минимальный размер:
+      # format: "mp4"
+      # codec: "mpeg4"
+      # output_params: ["-q:v", "5"]
+      #
+      # Средний компромисс по размеру и качеству:
+      # format: "mp4"
+      # codec: "mpeg4"
+      # output_params: ["-q:v", "2"]
+      #
+      fps: 60
+      format: "mkv"
+      codec: "ffv1"
+      output_params: []
+    auto_placement: true
+    robot_base_pose_z_auto: true
+    object_spawn_clearance: null
+    bg_collision_mode: "nonconvex"
+    bg_use_decimated_collision_mesh: true
+    bg_collision_mesh: "background_registered_collision.glb"
+    obj_collision_mode: "coacd"
+    physx_contact_offset: 0.005
+    physx_rest_offset: 0.0
+    placement_mode: "fixed"
+    return_home: false
+    cameras:
+      base_camera:
+        use_scene_json: true
+      render_camera:
+        use_base_camera: true
+        eye: [0.8, 0.8, 0.6]
+        target: [0, 0, 0.2]
+        width: 512
+        height: 512
+        fov: 1.047
+      custom_cameras: []
+
+local:
+  airi_table_new_empty3_image:
+    reconstruction:
+      auto_upright_objects: false
+      bg_mesh_target_faces: 500000
+      bg_collision_target_faces: 50000
+      bg_save_quality: 98
+      inpaint_short_side: 1024
+
+    simulation:
+      physics: "default"
+      object_material:
+        static_friction: 0.8
+        dynamic_friction: 0.7
+        restitution: 0.0
+      renderer_kwargs:
+        max_num_materials: 50000
+        max_num_textures: 50000
+
+      # RC5 + Aero Hand debug / grasp-testing preset.
+      # Object-specific planner calibration for the current grasp-testing setup.
+      planner_object_calibrations:
+        orange_cube_ext:
+          pregrasp_offset_xyz: [0.0035, 0.0499, 0.0886]
+          descend_offset_xyz: [0.0035, 0.0499, 0.0786]
+          target_quat: [-0.5161, -0.6785, 0.4517, 0.2630]
+
+        green_cube_ext:
+          pregrasp_offset_xyz: [-0.0005, 0.0459, 0.0886]
+          descend_offset_xyz: [-0.0005, 0.0459, 0.0786]
+          target_quat: [-0.5161, -0.6785, 0.4517, 0.2630]
+
+        yellow_cube_ext:
+          pregrasp_offset_xyz: [-0.0005, 0.0459, 0.0886]
+          descend_offset_xyz: [-0.0005, 0.0459, 0.0786]
+          target_quat: [-0.5161, -0.6785, 0.4517, 0.2630]
+
+        blue_cube_ext:
+          pregrasp_offset_xyz: [-0.0005, 0.0459, 0.0886]
+          descend_offset_xyz: [-0.0005, 0.0459, 0.0786]
+          target_quat: [-0.5161, -0.6785, 0.4517, 0.2630]
+
+        white_cube_ext:
+          pregrasp_offset_xyz: [-0.0005, 0.0459, 0.0886]
+          descend_offset_xyz: [-0.0005, 0.0459, 0.0786]
+          target_quat: [-0.5161, -0.6785, 0.4517, 0.2630]
+
+        banana_ext:
+          pregrasp_offset_xyz: [-0.0005, 0.0459, 0.0886]
+          descend_offset_xyz: [-0.0005, 0.0459, 0.0786]
+          target_quat: [-0.5161, -0.6785, 0.4517, 0.2630]
+
+        tube_ext:
+          pregrasp_offset_xyz: [-0.0005, 0.0459, 0.0886]
+          descend_offset_xyz: [-0.0005, 0.0459, 0.0786]
+          target_quat: [-0.5161, -0.6785, 0.4517, 0.2630]
+
+        spray_bottle_ext:
+          # Start with the wrist in the side-grasp profile and preserve that TCP orientation.
+          pregrasp_offset_xyz: [-0.0350, 0.0700, 0.0886]
+          descend_offset_xyz: [-0.0350, 0.0700, -0.0100]
+          target_orientation_mode: current_tcp
+
+        plastic_cup_ext:
+          pregrasp_offset_xyz: [-0.0005, 0.0459, 0.094]
+          descend_offset_xyz: [-0.0005, 0.0459, 0.094]
+          target_quat: [-0.5161, -0.6785, 0.4517, 0.2630]
+
+      planner_lift_delta_z: 0.05 # Код умножает значение на 2: фактический подъём после захвата составляет 10 см
+      planner_proxy_xy_step_m: 0.004 # Максимальный шаг по X/Y за итерацию; baseline было 0.01
+      planner_proxy_z_step_m: 0.002 # Максимальный шаг по Z за итерацию; baseline было 0.008
+      planner_proxy_lift_z_step_m: 0.02 # Отдельный быстрый шаг подъёма, не влияющий на точный спуск
+      planner_proxy_max_stage_steps: 800 # Лимит итераций на stage; baseline было 100
+      planner_proxy_pos_tol_m: 0.001 # Stage считается достигшей цели при ошибке <= 1 см
+      planner_proxy_lift_pos_tol_m: 0.01 # Допуск завершения только для стадии подъёма
+      planner_proxy_stall_steps: 60 # Abort, если ошибка не улучшается 12 шагов подряд
+      planner_proxy_hold_steps: 1 # Сколько env.step делать на один proxy-action
+      planner_proxy_rot_step_deg: 6.0 # Максимальный шаг по ориентации за итерацию, в градусах
+      planner_proxy_rot_tol_deg: 8.0 # Допуск по ориентации для завершения stage, в градусах
+
+      # контроллер
+      robot_uids: "rc5_aero_hand_openr2s_rl"
+      control_mode: "arm_pd_ee_target_delta_pose_align2_gripper_pd_joint_pos"
+
+      # пресеты для кисти
+      hand_contact_config: "config/hand_contact_profiles.yaml"
+      hand_contact_profile: "rubber_fingertips_v2"
+      hand_controller_config: "config/hand_controller_profiles.yaml"
+      hand_controller_profile: "stronger_grasp_v2"
+      #hand_pose_config: "config/hand_pose_presets.yaml"
+      teleop_profile_config: "config/teleop_profiles.yaml"
+      teleop_profile: "rc5_teleop_v1"
+
+      # настройки света и теней для сцены
+      lighting_profile_config: "config/lighting_profiles.yaml"
+      # tabletop_side_shadows_left / tabletop_side_shadows_right / tabletop_soft_shadows / tabletop_topdown_soft
+      lighting_profile: "tabletop_object_shadows_right"
+
+      ###################################################
+      # настройки начальной ориентации и конфигурации манипулятора
+      #
+      # положение и ориентация основания манипулятора
+      robot_base_pose: # [x, y, z] + кватернион
+        - 0.45
+        - -0.75
+        - 0.1204
+        - 0.9177546
+        - 0
+        - 0
+        - 0.3971479
+      #
+      # Full runtime qpos: arm joint0..joint5 followed by 16 active hand joints.
+      robot_init_qpos_profiles:
+        top:
+          &robot_init_qpos_top [
+            0.2853,
+            -1.6320,
+            -1.7735,
+            -3.15,
+            -2.75,
+            -0.050,
+            0.7843,
+            0.3536,
+            0.2661,
+            0.2661,
+            0.0316,
+            0.1497,
+            0.4390,
+            0.5261,
+            0.5262,
+            0.7011,
+            0.1958,
+            0.4374,
+            0.3500,
+            0.3500,
+            0.3501,
+            0.3500,
+          ]
+        # Snapshot of the real RC5 read from 10.10.10.10 on 2026-09-07 15:39 MSK.
+        # Arm joint0..joint5 as reported by motion.joint.get_actual_position('rad');
+        # hand joints copied from the 'top' profile (the AeroHand was not read).
+        # Reference TCP from the robot, in its own base frame (m, deg):
+        #   [-0.18558, 0.40049, 0.39699, -61.73761, -89.81074, 11.76573]
+        real_current_20260907:
+          [
+            2.419741,
+            -1.134978,
+            -2.015147,
+            3.151707,
+            -1.420472,
+            1.573469,
+            0.7843,
+            0.3536,
+            0.2661,
+            0.2661,
+            0.0316,
+            0.1497,
+            0.4390,
+            0.5261,
+            0.5262,
+            0.7011,
+            0.1958,
+            0.4374,
+            0.3500,
+            0.3500,
+            0.3501,
+            0.3500,
+          ]
+        side:
+          [
+            0.2853,
+            -1.6320,
+            -1.7735,
+            -3.15,
+            -2.75,
+            1.483530,
+            1.7453,
+            0.6519,
+            0.5137,
+            0.5278,
+            0.5137,
+            0.0605,
+            0.6519,
+            0.5137,
+            0.5278,
+            0.5137,
+            0.2450,
+            0.6519,
+            0.5137,
+            0.5278,
+            0.5137,
+            0.2450,
+          ]
+
+      robot_init_qpos_profile_by_object:
+        orange_cube_ext: top
+        green_cube_ext: top
+        yellow_cube_ext: top
+        blue_cube_ext: top
+        white_cube_ext: top
+        banana_ext: top
+        tube_ext: top
+        spray_bottle_ext: side
+        plastic_cup_ext: top
+
+      # Compatibility value for launch paths that do not resolve object-specific profiles.
+      robot_init_qpos: *robot_init_qpos_top
+
+      sim_ground_offset: 1.0
+      settle_steps: 120
+      video_fps: 60
+      object_spawn_clearance: 0.002
+
+      bg_collision_mode: "nonconvex"
+      bg_use_decimated_collision_mesh: true
+      bg_collision_mesh: "background_registered_collision.glb"
+      obj_collision_mode: "coacd"
+
+      placement_mode: "fixed"
+      manip_object_id: blue_cube_ext # тут задается ID обьекта который будет захватываться
+
+      # список обьектов на сцене
+      include_objects:
+        #- plate_ext
+        - container_blue_ext
+        - white_cube_ext
+        - orange_cube_ext
+        - green_cube_ext
+        - yellow_cube_ext
+        - blue_cube_ext
+        - spray_bottle_ext
+        - plastic_cup_ext
+        #- coke_can_ext
+        #- apple_ext
+        #- tube_ext
+        #- banana_ext
+
+      # параметры и координаты обьектов на сцене
+      object_placements:
+        "plate_ext":
+          mesh_path: "/app/assets/object_bank/plate_ext/textured.dae"
+          collision_mesh_path: "/app/assets/object_bank/plate_ext/collision.obj"
+          name: "plate"
+          task_semantic_name: "yellow plate"
+          position: [-0.15, -0.75, 0.0] # положение обьекта в мировой СК
+          orientation: [1, 0, 0, 0] # кватернион [w, x, y, z]
+          scale: 1.5
+          collision_mode: "nonconvex"
+          body_type: "kinematic"
+          z_extra: 0.0
+
+        "coke_can_ext":
+          mesh_path: "/app/assets/object_bank/coke_can_ext/opened_textured.dae"
+          collision_mesh_path: "/app/assets/object_bank/coke_can_ext/collision.obj"
+          name: "coke_can"
+          task_semantic_name: "coke can"
+          position: [-0.25, -0.55, 0.0]
+          orientation: [0.7071, 0.7071, 0, 0]
+          scale: 1.0
+          collision_mode: "coacd"
+          body_type: "dynamic"
+          z_extra: 0.0
+
+        "container_blue_ext":
+          mesh_path: "/app/assets/object_bank/container_blue_ext/visual.glb"
+          collision_mesh_path: "/app/assets/object_bank/container_blue_ext/collision.glb"
+          name: "container_blue"
+          task_semantic_name: "blue container"
+          position: [-0.32, -0.5, 0.0]
+          orientation: [0.7071, 0, 0, -0.7071]
+          scale: 0.35
+          collision_mode: "nonconvex" #collision_mode: "coacd"
+          body_type: "kinematic" #body_type: "dynamic"
+          z_extra: 0.0
+
+        "orange_cube_ext":
+          mesh_path: "/app/assets/object_bank/orange_cube_ext/visual.glb"
+          collision_mesh_path: "/app/assets/object_bank/orange_cube_ext/collision.coacd.ply"
+          name: "orange_cube"
+          task_semantic_name: "orange cube"
+          position: [-0.3, -0.7, 0.0]
+          orientation: [1, 0, 0, 0]
+          scale: 1.0
+          collision_mode: "coacd"
+          body_type: "dynamic"
+          z_extra: 0.0
+
+        blue_cube_ext:
+          mesh_path: "/app/assets/object_bank/blue_cube_ext/visual.glb"
+          collision_mesh_path: "/app/assets/object_bank/blue_cube_ext/collision.coacd.ply"
+          name: "blue_cube"
+          task_semantic_name: "blue cube"
+          position: [-0.25, -0.85, 0.0]
+          orientation: [1, 0, 0, 0]
+          scale: 1.0
+          collision_mode: "coacd"
+          body_type: "dynamic"
+          z_extra: 0.0
+
+        green_cube_ext:
+          mesh_path: "/app/assets/object_bank/green_cube_ext/visual.glb"
+          collision_mesh_path: "/app/assets/object_bank/green_cube_ext/collision.coacd.ply"
+          name: "green_cube"
+          task_semantic_name: "green cube"
+          position: [0.0, -0.8, 0.0]
+          orientation: [1, 0, 0, 0]
+          scale: 1.0
+          collision_mode: "coacd"
+          body_type: "dynamic"
+          z_extra: 0.0
+
+        yellow_cube_ext:
+          mesh_path: "/app/assets/object_bank/yellow_cube_ext/visual.glb"
+          collision_mesh_path: "/app/assets/object_bank/yellow_cube_ext/collision.coacd.ply"
+          name: "yellow_cube"
+          task_semantic_name: "yellow cube"
+          position: [-0.35, -0.8, 0.0]
+          orientation: [1, 0, 0, 0]
+          scale: 1.0
+          collision_mode: "coacd"
+          body_type: "dynamic"
+          z_extra: 0.0
+
+        white_cube_ext:
+          mesh_path: "/app/assets/object_bank/white_cube_ext/visual.glb"
+          collision_mesh_path: "/app/assets/object_bank/white_cube_ext/collision.coacd.ply"
+          name: "white_cube"
+          task_semantic_name: "white cube"
+          position: [-0.0, -0.7, 0.0]
+          orientation: [1, 0, 0, 0]
+          scale: 1.0
+          collision_mode: "coacd"
+          body_type: "dynamic"
+          z_extra: 0.0
+
+        "spray_bottle_ext":
+          mesh_path: "/app/assets/object_bank/spray_bottle_ext/visual.glb"
+          collision_mesh_path: "/app/assets/object_bank/spray_bottle_ext/visual.glb.coacd.ply"
+          name: "spray_bottle"
+          task_semantic_name: "spray bottle"
+          position: [-0.12, -0.85, 0.0]
+          orientation: [1, 0, 0, 0]
+          scale: 1.0
+          collision_mode: "coacd"
+          body_type: "dynamic"
+          z_extra: 0.0
+
+        "plastic_cup_ext":
+          mesh_path: "/app/assets/object_bank/plastic_cup_ext/visual.glb"
+          collision_mesh_path: "/app/assets/object_bank/plastic_cup_ext/visual.glb.coacd.ply"
+          name: "plastic_cup"
+          task_semantic_name: "plastic cup"
+          position: [-0.12, -0.55, 0.0]
+          orientation: [1, 0, 0, 0]
+          scale: 1.0
+          collision_mode: "coacd"
+          body_type: "dynamic"
+          z_extra: 0.0
+
+        "tube_ext":
+          mesh_path: "/app/assets/object_bank/tube_ext/visual.glb"
+          collision_mesh_path: "/app/assets/object_bank/tube_ext/collision.coacd.ply"
+          name: "tube"
+          task_semantic_name: "tube"
+          position: [-0.1, -0.6, 0.0]
+          orientation: [0.7071, 0, 0, 0.7071]
+          scale: 1.0
+          collision_mode: "coacd"
+          body_type: "dynamic"
+          z_extra: 0.0
+
+        "banana_ext":
+          mesh_path: "/app/assets/object_bank/banana_ext/textured.glb"
+          collision_mesh_path: "/app/assets/object_bank/banana_ext/collision.obj"
+          name: "banana"
+          task_semantic_name: "banana"
+          position: [-0.25, -0.55, 0.0]
+          orientation: [0.7071, 0, 0, -0.7071]
+          scale: 1.0
+          collision_mode: "coacd"
+          body_type: "dynamic"
+          z_extra: 0.0
+
+        "apple_ext":
+          mesh_path: "/app/assets/object_bank/apple_ext/textured.vis.glb"
+          collision_mesh_path: "/app/assets/object_bank/apple_ext/collision.obj"
+          name: "apple"
+          task_semantic_name: "apple"
+          position: [-0.25, -0.55, 0.0]
+          orientation: [1, 0, 0, 0]
+          scale: 1.0
+          collision_mode: "coacd"
+          body_type: "dynamic"
+          z_extra: 0.0

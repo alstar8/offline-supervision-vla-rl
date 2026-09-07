@@ -1,0 +1,355 @@
+{
+  "argv": [
+    "--motion_backend",
+    "proxy_ee_delta",
+    "--config_path",
+    "config/config_debug.yaml",
+    "--key",
+    "airi_table_new_empty3_image",
+    "--scene",
+    "assets/scenes/airi_table_new_empty3_image/simulation/scene.json",
+    "--task_type",
+    "pick_up",
+    "--task_object_id",
+    "plastic_cup_ext",
+    "--rl4vla_raw_episode_output",
+    "/app/runs/manual/proxy_ee_delta_viewer_airi_table_new_empty3_image_pick_up_plastic_cup_ext_20260907_101012/rl4vla_raw_episode.npz",
+    "--save_video_gif_on_exit",
+    "--save_video_gif_path",
+    "/app/runs/manual/proxy_ee_delta_viewer_airi_table_new_empty3_image_pick_up_plastic_cup_ext_20260907_101012/debug_video.gif",
+    "--runtime_request_path",
+    "/app/runs/manual/proxy_ee_delta_viewer_airi_table_new_empty3_image_pick_up_plastic_cup_ext_20260907_101012/runtime_request.json"
+  ],
+  "artifacts": {
+    "debug_video_gif_path": "/app/runs/manual/proxy_ee_delta_viewer_airi_table_new_empty3_image_pick_up_plastic_cup_ext_20260907_101012/debug_video_success.gif",
+    "debug_video_path": null,
+    "dense_episode_path": null,
+    "execution_summary_path": "/app/runs/manual/proxy_ee_delta_viewer_airi_table_new_empty3_image_pick_up_plastic_cup_ext_20260907_101012/execution_summary.json",
+    "rl4vla_raw_episode_path": "/app/runs/manual/proxy_ee_delta_viewer_airi_table_new_empty3_image_pick_up_plastic_cup_ext_20260907_101012/rl4vla_raw_episode_success.npz",
+    "run_log_path": "/app/runs/manual/proxy_ee_delta_viewer_airi_table_new_empty3_image_pick_up_plastic_cup_ext_20260907_101012/run.log"
+  },
+  "batch": {
+    "artifacts_recorded_per_env": null,
+    "auto_dense_episode_enabled": true,
+    "batched_request": false,
+    "failed_env_indices": [],
+    "per_env_feedback_count": 0,
+    "requested_num_envs": 1,
+    "runtime_batch_feedback_present": false,
+    "runtime_batch_size": null,
+    "successful_env_count": null
+  },
+  "dispatch_plan": {
+    "callable_name": "run_unified_proxy_backend_request",
+    "env_updates": {},
+    "forwarded_argv": [
+      "--config_path",
+      "config/config_debug.yaml",
+      "--key",
+      "airi_table_new_empty3_image",
+      "--scene",
+      "assets/scenes/airi_table_new_empty3_image/simulation/scene.json",
+      "--task_object_id",
+      "plastic_cup_ext",
+      "--rl4vla_raw_episode_output",
+      "/app/runs/manual/proxy_ee_delta_viewer_airi_table_new_empty3_image_pick_up_plastic_cup_ext_20260907_101012/rl4vla_raw_episode.npz",
+      "--save_video_gif_on_exit",
+      "--save_video_gif_path",
+      "/app/runs/manual/proxy_ee_delta_viewer_airi_table_new_empty3_image_pick_up_plastic_cup_ext_20260907_101012/debug_video.gif",
+      "--runtime_request_path",
+      "/app/runs/manual/proxy_ee_delta_viewer_airi_table_new_empty3_image_pick_up_plastic_cup_ext_20260907_101012/runtime_request.json",
+      "--robot_uids",
+      "rc5_aero_hand_openr2s_rl",
+      "--sim_backend",
+      "physx_cuda",
+      "--control_mode",
+      "arm_pd_ee_target_delta_pose_align2_gripper_pd_joint_pos",
+      "--teleop_profile_config",
+      "config/teleop_profiles.yaml",
+      "--teleop_profile",
+      "rc5_teleop_v1",
+      "--auto_pick_macro",
+      "1"
+    ],
+    "module_name": "openreal2sim.simulation.maniskill.scripts.rc5_unified_proxy_runtime"
+  },
+  "motion_backend": "proxy_ee_delta",
+  "result": {
+    "exit_code": 0,
+    "failure": null
+  },
+  "run_dir": "/app/runs/manual/proxy_ee_delta_viewer_airi_table_new_empty3_image_pick_up_plastic_cup_ext_20260907_101012",
+  "task_destination_id": null,
+  "task_object_id": "plastic_cup_ext",
+  "task_plan_summary": "task_type=pick_up object_id=plastic_cup_ext destination_id=<none> stages=pregrasp,descend,close,lift,retention_check",
+  "task_prompt": null,
+  "task_type": "pick_up",
+  "trace_record": {
+    "batch_trace": null,
+    "dispatch_callable": "run_unified_proxy_backend_request",
+    "dispatch_module": "openreal2sim.simulation.maniskill.scripts.rc5_unified_proxy_runtime",
+    "events": [
+      {
+        "event_type": "dispatch_planned",
+        "payload": {
+          "dispatch_callable": "run_unified_proxy_backend_request",
+          "dispatch_module": "openreal2sim.simulation.maniskill.scripts.rc5_unified_proxy_runtime",
+          "forwarded_argc": 27,
+          "motion_backend": "proxy_ee_delta",
+          "stage_count": 5,
+          "task_type": "pick_up"
+        }
+      },
+      {
+        "event_type": "dispatch_started",
+        "payload": {
+          "env_update_count": 0,
+          "env_update_keys": []
+        }
+      },
+      {
+        "event_type": "dispatch_finished",
+        "payload": {
+          "execution_outcome": "success",
+          "exit_code": 0
+        }
+      },
+      {
+        "event_type": "backend_request_received",
+        "payload": {
+          "macro_backend": "proxy_ee_delta",
+          "macro_route": "pick_macro_1",
+          "planner_backend": "proxy_ee_delta",
+          "stage_count": 5,
+          "task_type": "pick_up"
+        }
+      },
+      {
+        "event_type": "macro_route_selected",
+        "payload": {
+          "macro_backend": "proxy_ee_delta",
+          "macro_route": "pick_macro_1",
+          "planner_backend": "proxy_ee_delta"
+        }
+      },
+      {
+        "event_type": "stage_sequence_received",
+        "payload": {
+          "stage_count": 5,
+          "stage_kinds": [
+            "move_to_pregrasp",
+            "move_to_descend",
+            "close_gripper",
+            "lift_object",
+            "retention_check"
+          ],
+          "stage_names": [
+            "pregrasp",
+            "descend",
+            "close",
+            "lift",
+            "retention_check"
+          ]
+        }
+      },
+      {
+        "event_type": "stage_submitted_to_macro",
+        "payload": {
+          "macro_backend": "proxy_ee_delta",
+          "macro_route": "pick_macro_1",
+          "order_index": 0,
+          "planner_backend": "proxy_ee_delta",
+          "stage_kind": "move_to_pregrasp",
+          "stage_name": "pregrasp"
+        }
+      },
+      {
+        "event_type": "stage_submitted_to_macro",
+        "payload": {
+          "macro_backend": "proxy_ee_delta",
+          "macro_route": "pick_macro_1",
+          "order_index": 1,
+          "planner_backend": "proxy_ee_delta",
+          "stage_kind": "move_to_descend",
+          "stage_name": "descend"
+        }
+      },
+      {
+        "event_type": "stage_submitted_to_macro",
+        "payload": {
+          "macro_backend": "proxy_ee_delta",
+          "macro_route": "pick_macro_1",
+          "order_index": 2,
+          "planner_backend": "proxy_ee_delta",
+          "stage_kind": "close_gripper",
+          "stage_name": "close"
+        }
+      },
+      {
+        "event_type": "stage_submitted_to_macro",
+        "payload": {
+          "macro_backend": "proxy_ee_delta",
+          "macro_route": "pick_macro_1",
+          "order_index": 3,
+          "planner_backend": "proxy_ee_delta",
+          "stage_kind": "lift_object",
+          "stage_name": "lift"
+        }
+      },
+      {
+        "event_type": "stage_submitted_to_macro",
+        "payload": {
+          "macro_backend": "proxy_ee_delta",
+          "macro_route": "pick_macro_1",
+          "order_index": 4,
+          "planner_backend": "proxy_ee_delta",
+          "stage_kind": "retention_check",
+          "stage_name": "retention_check"
+        }
+      },
+      {
+        "event_type": "macro_started",
+        "payload": {
+          "macro_backend": "proxy_ee_delta",
+          "macro_route": "pick_macro_1",
+          "planner_backend": "proxy_ee_delta"
+        }
+      },
+      {
+        "event_type": "executor_path_selected",
+        "payload": {
+          "compatibility_reason": null,
+          "executor_path": "direct_unified",
+          "skip_reason": null
+        }
+      },
+      {
+        "event_type": "macro_finished",
+        "payload": {
+          "execution_outcome": "success",
+          "exit_code": 0,
+          "failed_stage": null,
+          "macro_backend": "proxy_ee_delta",
+          "macro_route": "pick_macro_1",
+          "planner_backend": "proxy_ee_delta",
+          "semantic_task_success": true
+        }
+      }
+    ],
+    "execution_outcome": "success",
+    "exit_code": 0,
+    "seed": {
+      "config_key": "airi_table_new_empty3_image",
+      "destination_id": null,
+      "motion_backend": "proxy_ee_delta",
+      "object_id": "plastic_cup_ext",
+      "prompt": null,
+      "robot_uids": "rc5_aero_hand_openr2s_rl",
+      "stage_kinds": [
+        "move_to_pregrasp",
+        "move_to_descend",
+        "close_gripper",
+        "lift_object",
+        "retention_check"
+      ],
+      "stage_names": [
+        "pregrasp",
+        "descend",
+        "close",
+        "lift",
+        "retention_check"
+      ],
+      "task_type": "pick_up"
+    },
+    "stage_records": [
+      {
+        "backend_execution_outcome": "success",
+        "kind": "move_to_pregrasp",
+        "lifecycle": "completed",
+        "name": "pregrasp",
+        "order_index": 0,
+        "stage_outcome": "success",
+        "transitions": [
+          "planned",
+          "submitted_to_backend",
+          "completed"
+        ]
+      },
+      {
+        "backend_execution_outcome": "success",
+        "kind": "move_to_descend",
+        "lifecycle": "completed",
+        "name": "descend",
+        "order_index": 1,
+        "stage_outcome": "success",
+        "transitions": [
+          "planned",
+          "submitted_to_backend",
+          "completed"
+        ]
+      },
+      {
+        "backend_execution_outcome": "success",
+        "kind": "close_gripper",
+        "lifecycle": "completed",
+        "name": "close",
+        "order_index": 2,
+        "stage_outcome": "success",
+        "transitions": [
+          "planned",
+          "submitted_to_backend",
+          "completed"
+        ]
+      },
+      {
+        "backend_execution_outcome": "success",
+        "kind": "lift_object",
+        "lifecycle": "completed",
+        "name": "lift",
+        "order_index": 3,
+        "stage_outcome": "success",
+        "transitions": [
+          "planned",
+          "submitted_to_backend",
+          "completed"
+        ]
+      },
+      {
+        "backend_execution_outcome": "success",
+        "kind": "retention_check",
+        "lifecycle": "completed",
+        "name": "retention_check",
+        "order_index": 4,
+        "stage_outcome": "success",
+        "transitions": [
+          "planned",
+          "submitted_to_backend",
+          "completed"
+        ]
+      }
+    ]
+  },
+  "trace_seed": {
+    "config_key": "airi_table_new_empty3_image",
+    "destination_id": null,
+    "motion_backend": "proxy_ee_delta",
+    "object_id": "plastic_cup_ext",
+    "prompt": null,
+    "robot_uids": "rc5_aero_hand_openr2s_rl",
+    "stage_kinds": [
+      "move_to_pregrasp",
+      "move_to_descend",
+      "close_gripper",
+      "lift_object",
+      "retention_check"
+    ],
+    "stage_names": [
+      "pregrasp",
+      "descend",
+      "close",
+      "lift",
+      "retention_check"
+    ],
+    "task_type": "pick_up"
+  }
+}

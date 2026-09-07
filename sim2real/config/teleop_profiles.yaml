@@ -1,0 +1,36 @@
+profiles:
+  default:
+    description: Default placeholder teleop profile with no remap.
+    sim_delta_remap_rpy_deg:
+      - 0
+      - 0
+      - 0
+    gripper_open_signal: -1.0
+    gripper_close_signal: 1.0
+
+  widowx_teleop_v1:
+    description: WidowX teleop profile with identity EE delta remap.
+    sim_delta_remap_rpy_deg:
+      - 0
+      - 0
+      - 0
+    gripper_open_signal: -1.0
+    gripper_close_signal: 1.0
+
+  rc5_teleop_v1:
+    description: RC5 teleop frame remap provided with the current calibration bundle.
+    sim_delta_remap_rpy_deg:
+      - 0
+      - 0
+      - 90
+    gripper_open_signal: -1.0
+    gripper_close_signal: 1.0
+
+  rc5_teleop_realbase_v1:
+    description: RC5 teleop remap for the real-base calibration yaw (+46.8 deg world yaw).
+    sim_delta_remap_rpy_deg:
+      - 0
+      - 0
+      - -46.8
+    gripper_open_signal: -1.0
+    gripper_close_signal: 1.0

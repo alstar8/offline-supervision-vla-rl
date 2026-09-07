@@ -1,0 +1,126 @@
+profiles:
+  rubber_fingertips_v1:
+    description: RC5 fingertip contact profile for moderately grippy rubberized tips.
+    materials:
+      fingertip:
+        # ManiSkill reference contact material:
+        #   Panda gripper:   static_friction=2.0, dynamic_friction=2.0, restitution=0.0
+        #   WidowX gripper:  static_friction=2.0, dynamic_friction=2.0, restitution=0.0
+        # static_friction: threshold before contact starts slipping; higher helps resist initial slip.
+        static_friction: 500.0
+        # dynamic_friction: resistance after sliding has already started; higher slows ongoing slip.
+        dynamic_friction: 500.0
+        # restitution: contact bounciness; keep near 0 for soft, non-bouncy grasp contact.
+        restitution: 0.0
+    links:
+      right_thumb_tip_link:
+        material: fingertip
+        # ManiSkill reference patch radii:
+        #   Panda gripper:   patch_radius=0.1, min_patch_radius=0.1
+        #   WidowX gripper:  patch_radius=0.1, min_patch_radius=0.1
+        patch_radius: 0.30
+        min_patch_radius: 0.15
+      right_index_tip_link:
+        material: fingertip
+        patch_radius: 0.30
+        min_patch_radius: 0.15
+      right_middle_tip_link:
+        material: fingertip
+        patch_radius: 0.30
+        min_patch_radius: 0.15
+      right_ring_tip_link:
+        material: fingertip
+        patch_radius: 0.30
+        min_patch_radius: 0.15
+      right_pinky_tip_link:
+        material: fingertip
+        patch_radius: 0.30
+        min_patch_radius: 0.15
+
+  rubber_fingertips_v2:
+    description: RC5 rubberized finger-chain profile with enlarged contact patches on fingertips.
+    materials:
+      fingertip:
+        static_friction: 500.0
+        dynamic_friction: 500.0
+        restitution: 0.0
+    links:
+      # Side-grasp contacts frequently land on the inner finger links rather than
+      # the tips. These links receive the rubber material without enlarged patches.
+      right_thumb_proximal_link:
+        material: fingertip
+      right_thumb_distal_link:
+        material: fingertip
+      right_thumb_tip_link:
+        material: fingertip
+        patch_radius: 0.35
+        min_patch_radius: 0.18
+      right_index_proximal_link:
+        material: fingertip
+      right_index_middle_link:
+        material: fingertip
+      right_index_distal_link:
+        material: fingertip
+      right_index_tip_link:
+        material: fingertip
+        patch_radius: 0.35
+        min_patch_radius: 0.18
+      right_middle_proximal_link:
+        material: fingertip
+      right_middle_middle_link:
+        material: fingertip
+      right_middle_distal_link:
+        material: fingertip
+      right_middle_tip_link:
+        material: fingertip
+        patch_radius: 0.35
+        min_patch_radius: 0.18
+      right_ring_proximal_link:
+        material: fingertip
+      right_ring_middle_link:
+        material: fingertip
+      right_ring_distal_link:
+        material: fingertip
+      right_ring_tip_link:
+        material: fingertip
+        patch_radius: 0.35
+        min_patch_radius: 0.18
+      right_pinky_proximal_link:
+        material: fingertip
+      right_pinky_middle_link:
+        material: fingertip
+      right_pinky_distal_link:
+        material: fingertip
+      right_pinky_tip_link:
+        material: fingertip
+        patch_radius: 0.35
+        min_patch_radius: 0.18
+
+  rubber_fingertips_v3_large_patch:
+    description: RC5 fingertip contact profile with aggressively enlarged fingertip contact patches for maximum retention.
+    materials:
+      fingertip:
+        static_friction: 500.0
+        dynamic_friction: 500.0
+        restitution: 0.0
+    links:
+      right_thumb_tip_link:
+        material: fingertip
+        patch_radius: 0.40
+        min_patch_radius: 0.20
+      right_index_tip_link:
+        material: fingertip
+        patch_radius: 0.40
+        min_patch_radius: 0.20
+      right_middle_tip_link:
+        material: fingertip
+        patch_radius: 0.40
+        min_patch_radius: 0.20
+      right_ring_tip_link:
+        material: fingertip
+        patch_radius: 0.40
+        min_patch_radius: 0.20
+      right_pinky_tip_link:
+        material: fingertip
+        patch_radius: 0.40
+        min_patch_radius: 0.20

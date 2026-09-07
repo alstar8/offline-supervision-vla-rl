@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--This does not replace URDF, and is not an extension of URDF.
+    This is a format for representing semantic information about the robot structure.
+    A URDF file must exist for this robot as well, where the joints and the links that are referenced are defined
+-->
+<robot name="rc5_aero_hand">
+    <!--GROUPS: Representation of a set of joints and links. This can be useful for specifying DOF to plan for, defining arms, end effectors, etc-->
+    <!--LINKS: When a link is specified, the parent joint of that link (if it exists) is automatically included-->
+    <!--JOINTS: When a joint is specified, the child link of that joint (which will always exist) is automatically included-->
+    <!--CHAINS: When a chain is specified, all the links along the chain (including endpoints) are included in the group. Additionally, all the joints that are parents to included links are also included. This means that joints along the chain and the parent joint of the base link are included in the group-->
+    <!--SUBGROUPS: Groups can also be formed by referencing to already defined group names-->
+    <group name="rc5_group">
+        <link name="world"/>
+        <link name="body0"/>
+        <link name="frame1"/>
+        <link name="body1"/>
+        <link name="frame2"/>
+        <link name="body2"/>
+        <link name="frame2_1"/>
+        <link name="frame3"/>
+        <link name="body3"/>
+        <link name="frame3_1"/>
+        <link name="frame4"/>
+        <link name="body4"/>
+        <link name="frame5"/>
+        <link name="body5"/>
+        <link name="frame6"/>
+        <link name="body6"/>
+        <joint name="fixed0"/>
+        <joint name="joint0"/>
+        <joint name="fixed1"/>
+        <joint name="joint1"/>
+        <joint name="fixed2"/>
+        <joint name="fixed2_1"/>
+        <joint name="joint2"/>
+        <joint name="fixed3"/>
+        <joint name="fixed3_1"/>
+        <joint name="joint3"/>
+        <joint name="fixed4"/>
+        <joint name="joint4"/>
+        <joint name="fixed5"/>
+        <joint name="joint5"/>
+        <joint name="fixed6"/>
+    </group>
+    <group name="aero_hand">
+        <link name="prehand"/>
+        <link name="right_base_link"/>
+        <link name="right_index_proximal_link"/>
+        <link name="right_index_middle_link"/>
+        <link name="right_index_distal_link"/>
+        <link name="right_index_tip_link"/>
+        <link name="right_middle_proximal_link"/>
+        <link name="right_middle_middle_link"/>
+        <link name="right_middle_distal_link"/>
+        <link name="right_middle_tip_link"/>
+        <link name="right_pinky_proximal_link"/>
+        <link name="right_pinky_middle_link"/>
+        <link name="right_pinky_distal_link"/>
+        <link name="right_pinky_tip_link"/>
+        <link name="right_ring_proximal_link"/>
+        <link name="right_ring_middle_link"/>
+        <link name="right_ring_distal_link"/>
+        <link name="right_ring_tip_link"/>
+        <link name="right_tcp_link"/>
+        <link name="right_t_link"/>
+        <link name="right_thumb_mcp_link"/>
+        <link name="right_thumb_proximal_link"/>
+        <link name="right_thumb_distal_link"/>
+        <link name="right_thumb_tip_link"/>
+        <joint name="gripper_mount"/>
+        <joint name="gripper_mount2"/>
+        <joint name="right_index_mcp_flex"/>
+        <joint name="right_index_pip"/>
+        <joint name="right_index_dip"/>
+        <joint name="right_index_tip"/>
+        <joint name="right_middle_mcp_flex"/>
+        <joint name="right_middle_pip"/>
+        <joint name="right_middle_dip"/>
+        <joint name="right_middle_tip"/>
+        <joint name="right_pinky_mcp_flex"/>
+        <joint name="right_pinky_pip"/>
+        <joint name="right_pinky_dip"/>
+        <joint name="right_pinky_tip"/>
+        <joint name="right_ring_mcp_flex"/>
+        <joint name="right_ring_pip"/>
+        <joint name="right_ring_dip"/>
+        <joint name="right_ring_tip"/>
+        <joint name="right_tcp_mount"/>
+        <joint name="right_thumb_cmc_abd"/>
+        <joint name="right_thumb_cmc_flex"/>
+        <joint name="right_thumb_mcp"/>
+        <joint name="right_thumb_ip"/>
+        <joint name="right_thumb_tip"/>
+    </group>
+</robot>

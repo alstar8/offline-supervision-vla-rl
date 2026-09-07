@@ -1,0 +1,110 @@
+"""
+NonConvexPlanner for robots with non-convex geometry (e.g. WidowX250S).
+Adapted from RL4VLA/ManiSkill mani_skill/examples/motionplanning/widowx/mplib_non_convex.py
+"""
+import os
+from typing import Optional, Sequence, Union
+import numpy as np
+
+from mplib import Planner
+from mplib.pymp import ArticulatedModel, PlanningWorld
+from mplib.pymp.planning import ompl
+
+
+class NonConvexPlanner(Planner):
+    """Motion planner for robots with non-convex collision geometry."""
+
+    def __init__(
+        self,
+        urdf: str,
+        move_group: str,
+        srdf: str = "",
+        package_keyword_replacement: str = "",
+        user_link_names: Sequence[str] = [],
+        user_joint_names: Sequence[str] = [],
+        joint_vel_limits: Optional[Union[Sequence[float], np.ndarray]] = None,
+        joint_acc_limits: Optional[Union[Sequence[float], np.ndarray]] = None,
+        **kwargs,
+    ):
+        if joint_vel_limits is None:
+            joint_vel_limits = []
+        if joint_acc_limits is None:
+            joint_acc_limits = []
+        self.urdf = urdf
+        srdf_path = urdf.replace(".urdf", ".srdf")
+        if srdf == "" and os.path.exists(srdf_path):
+            self.srdf = srdf_path
+            print(f"No SRDF file provided but found {self.srdf}")
+        else:
+            self.srdf = srdf_path  # Path for generated SRDF when srdf==""
+
+        # replace package:// keyword if exists
+        urdf = self.replace_package_keyword(package_keyword_replacement)
+
+        srdf_for_loader = self.srdf if os.path.exists(self.srdf) else srdf
+        self.robot = ArticulatedModel(
+            urdf,
+            srdf_for_loader,
+            [0, 0, -9.81],
+            user_link_names,
+            user_joint_names,
+            convex=False,
+            verbose=False,
+        )
+        self.pinocchio_model = self.robot.get_pinocchio_model()
+        self.user_link_names = self.pinocchio_model.get_link_names()
+        self.user_joint_names = self.pinocchio_model.get_joint_names()
+
+        self.planning_world = PlanningWorld(
+            [self.robot],
+            ["robot"],
+            kwargs.get("normal_objects", []),
+            kwargs.get("normal_object_names", []),
+        )
+
+        if srdf == "":
+            self.generate_collision_pair()
+            self.robot.update_SRDF(self.srdf)
+
+        self.joint_name_2_idx = {}
+        for i, joint in enumerate(self.user_joint_names):
+            self.joint_name_2_idx[joint] = i
+        self.link_name_2_idx = {}
+        for i, link in enumerate(self.user_link_names):
+            self.link_name_2_idx[link] = i
+
+        assert (
+            move_group in self.user_link_names
+        ), f"end-effector not found as one of the links in {self.user_link_names}"
+        self.move_group = move_group
+        self.robot.set_move_group(self.move_group)
+        self.move_group_joint_indices = self.robot.get_move_group_joint_indices()
+
+        self.joint_types = self.pinocchio_model.get_joint_types()
+        self.joint_limits = np.concatenate(self.pinocchio_model.get_joint_limits())
+        self.joint_vel_limits = (
+            joint_vel_limits
+            if len(joint_vel_limits)
+            else np.ones(len(self.move_group_joint_indices))
+        )
+        self.joint_acc_limits = (
+            joint_acc_limits
+            if len(joint_acc_limits)
+            else np.ones(len(self.move_group_joint_indices))
+        )
+        self.move_group_link_id = self.link_name_2_idx[self.move_group]
+        assert len(self.joint_vel_limits) == len(self.joint_acc_limits), (
+            f"length of joint_vel_limits ({len(self.joint_vel_limits)}) =/= "
+            f"length of joint_acc_limits ({len(self.joint_acc_limits)})"
+        )
+        assert len(self.joint_vel_limits) == len(self.move_group_joint_indices), (
+            f"length of joint_vel_limits ({len(self.joint_vel_limits)}) =/= "
+            f"length of move_group ({len(self.move_group_joint_indices)})"
+        )
+        assert len(self.joint_vel_limits) <= len(self.joint_limits), (
+            f"length of joint_vel_limits ({len(self.joint_vel_limits)}) > "
+            f"number of total joints ({len(self.joint_limits)})"
+        )
+
+        self.planning_world = PlanningWorld([self.robot], ["robot"], [], [])
+        self.planner = ompl.OMPLPlanner(world=self.planning_world)

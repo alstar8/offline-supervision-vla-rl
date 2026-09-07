@@ -1,0 +1,32 @@
+name: sim2real
+
+services:
+  simulation:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: sim2real:prerelease
+    container_name: sim2real-simulation
+    working_dir: /app
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+      - XAUTHORITY=${XAUTHORITY:-/tmp/.Xauthority}
+      - HOME=/tmp
+      - PYTHONPATH=/app
+      - QT_X11_NO_MITSHM=1
+      - NVIDIA_VISIBLE_DEVICES=0
+      - CUDA_VISIBLE_DEVICES=0
+      - NVIDIA_DRIVER_CAPABILITIES=all
+    volumes:
+      - ../:/app
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:-/tmp/.Xauthority}:${XAUTHORITY:-/tmp/.Xauthority}:ro
+    devices:
+      - /dev/dri:/dev/dri
+    gpus:
+      - driver: nvidia
+        device_ids: ["0"]
+        capabilities: [gpu]
+    stdin_open: true
+    tty: true
+    command: tail -f /dev/null

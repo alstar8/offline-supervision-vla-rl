@@ -1,0 +1,180 @@
+meta:
+  robot: rc5_aero_hand_openr2s
+  description: Preconfigured hand poses for RC5 debug runner.
+
+  hand_joint_names:
+    - right_thumb_cmc_abd
+    - right_thumb_cmc_flex
+    - right_thumb_mcp
+    - right_thumb_ip
+    - right_index_mcp_flex
+    - right_index_pip
+    - right_index_dip
+    - right_middle_mcp_flex
+    - right_middle_pip
+    - right_middle_dip
+    - right_ring_mcp_flex
+    - right_ring_pip
+    - right_ring_dip
+    - right_pinky_mcp_flex
+    - right_pinky_pip
+    - right_pinky_dip
+
+bindings:
+  open: teleop_open
+  close: teleop_close
+  full_open: full_open_v1
+  pinch: teleop_pinch_v1
+  tripod: teleop_tripod_v1
+  thumb_abduction_full: thumb_abduction_full_v1
+  thumb_abduction_partial: thumb_abduction_partial_v1
+
+poses:
+  full_open_v1:
+    source: derived
+    description: Fully open hand with all hand joints set to zero.
+    joints:
+      right_thumb_cmc_abd: 0.0
+      right_thumb_cmc_flex: 0.0
+      right_thumb_mcp: 0.0
+      right_thumb_ip: 0.0
+      right_index_mcp_flex: 0.0
+      right_index_pip: 0.0
+      right_index_dip: 0.0
+      right_middle_mcp_flex: 0.0
+      right_middle_pip: 0.0
+      right_middle_dip: 0.0
+      right_ring_mcp_flex: 0.0
+      right_ring_pip: 0.0
+      right_ring_dip: 0.0
+      right_pinky_mcp_flex: 0.0
+      right_pinky_pip: 0.0
+      right_pinky_dip: 0.0
+
+  teleop_open:
+    source: teleop
+    signal: -1
+    description: Open hand calibrated from teleop.
+    joints:
+      right_thumb_cmc_abd: 1.120300054550171
+      right_thumb_cmc_flex: 0.20990002155303955
+      right_thumb_mcp: 0.275
+      right_thumb_ip: 0.5
+      right_index_mcp_flex: 0.5052000331878662
+      right_index_pip: 0.625
+      right_index_dip: 0.625
+      right_middle_mcp_flex: 0.3802000331878662
+      right_middle_pip: 0.7501000165939331
+      right_middle_dip: 0.5
+      right_ring_mcp_flex: 0.38
+      right_ring_pip: 0.7501000165939331
+      right_ring_dip: 0.5
+      right_pinky_mcp_flex: 0.04520003318786621
+      right_pinky_pip: 1.0
+      right_pinky_dip: 0.5
+
+  teleop_close:
+    source: teleop
+    signal: 1
+    description: Close hand calibrated from teleop.
+    joints:
+      right_thumb_cmc_abd: 1.245300054550171
+      right_thumb_cmc_flex: 0.8349000215530396
+      right_thumb_mcp: 0.25
+      right_thumb_ip: 0.25
+      right_index_mcp_flex: 1.0002000331878662
+      right_index_pip: 0.875
+      right_index_dip: 0.75
+      right_middle_mcp_flex: 0.7502000331878662
+      right_middle_pip: 1.125100016593933
+      right_middle_dip: 0.5
+      right_ring_mcp_flex: 1.0
+      right_ring_pip: 0.8751000165939331
+      right_ring_dip: 0.625
+      right_pinky_mcp_flex: 0.3752000331878662
+      right_pinky_pip: 1.375
+      right_pinky_dip: 1.25
+
+  teleop_pinch_v1:
+    source: derived
+    description: Pinch preset derived from current runner logic using teleop_open + teleop_close.
+    joints:
+      right_thumb_cmc_abd: 1.245300054550171
+      right_thumb_cmc_flex: 0.8349000215530396
+      right_thumb_mcp: 0.25
+      right_thumb_ip: 0.25
+      right_index_mcp_flex: 1.0002000331878662
+      right_index_pip: 0.875
+      right_index_dip: 0.75
+      right_middle_mcp_flex: 0.11253000497817993
+      right_middle_pip: 0.16876500248908996
+      right_middle_dip: 0.075
+      right_ring_mcp_flex: 0.15
+      right_ring_pip: 0.13126500248908995
+      right_ring_dip: 0.09375
+      right_pinky_mcp_flex: 0.05628000497817993
+      right_pinky_pip: 0.20625
+      right_pinky_dip: 0.1875
+
+  teleop_tripod_v1:
+    source: derived
+    description: Tripod preset derived from current runner logic using teleop_open + teleop_close.
+    joints:
+      right_thumb_cmc_abd: 1.245300054550171
+      right_thumb_cmc_flex: 0.8349000215530396
+      right_thumb_mcp: 0.25
+      right_thumb_ip: 0.25
+      right_index_mcp_flex: 1.0002000331878662
+      right_index_pip: 0.875
+      right_index_dip: 0.75
+      right_middle_mcp_flex: 0.7502000331878662
+      right_middle_pip: 1.125100016593933
+      right_middle_dip: 0.5
+      right_ring_mcp_flex: 0.25
+      right_ring_pip: 0.21877500414848328
+      right_ring_dip: 0.15625
+      right_pinky_mcp_flex: 0.09380000829696655
+      right_pinky_pip: 0.34375
+      right_pinky_dip: 0.3125
+
+  thumb_abduction_full_v1:
+    source: derived
+    description: Open hand with thumb abduction set to the full RC5 upper-limit target used by staged close.
+    joints:
+      right_thumb_cmc_abd: 1.7452759742736816
+      right_thumb_cmc_flex: 0.20990002155303955
+      right_thumb_mcp: 0.275
+      right_thumb_ip: 0.5
+      right_index_mcp_flex: 0.5052000331878662
+      right_index_pip: 0.625
+      right_index_dip: 0.625
+      right_middle_mcp_flex: 0.3802000331878662
+      right_middle_pip: 0.7501000165939331
+      right_middle_dip: 0.5
+      right_ring_mcp_flex: 0.38
+      right_ring_pip: 0.7501000165939331
+      right_ring_dip: 0.5
+      right_pinky_mcp_flex: 0.04520003318786621
+      right_pinky_pip: 1.0
+      right_pinky_dip: 0.5
+
+  thumb_abduction_partial_v1:
+    source: derived
+    description: Open hand with thumb abduction set to 2/3 of the RC5 upper-limit target.
+    joints:
+      right_thumb_cmc_abd: 1.1635173161824544
+      right_thumb_cmc_flex: 0.20990002155303955
+      right_thumb_mcp: 0.275
+      right_thumb_ip: 0.5
+      right_index_mcp_flex: 0.5052000331878662
+      right_index_pip: 0.625
+      right_index_dip: 0.625
+      right_middle_mcp_flex: 0.3802000331878662
+      right_middle_pip: 0.7501000165939331
+      right_middle_dip: 0.5
+      right_ring_mcp_flex: 0.38
+      right_ring_pip: 0.7501000165939331
+      right_ring_dip: 0.5
+      right_pinky_mcp_flex: 0.04520003318786621
+      right_pinky_pip: 1.0
+      right_pinky_dip: 0.5

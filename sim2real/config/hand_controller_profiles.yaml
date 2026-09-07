@@ -1,0 +1,36 @@
+profiles:
+  stronger_grasp_v1:
+    description: Stronger RC5 hand joint drives for maintaining grasp during lift.
+    # ManiSkill reference gripper drives:
+    #   Panda gripper:   stiffness=1000, damping=100, force_limit=100
+    #   WidowX gripper:  stiffness=1000, damping=100, force_limit=100
+    # stiffness: how strongly joints pull toward target qpos; higher = firmer grasp.
+    stiffness: 1000
+    # damping: how much motion is damped near the target; higher = less oscillation / overshoot.
+    damping: 100
+    # force_limit: maximum actuator effort available to maintain the hand target under load.
+    force_limit: 100
+    # friction: joint-drive friction term inside the controller, not fingertip contact friction.
+    friction: 0.0
+
+  stronger_grasp_v2:
+    description: Stronger RC5 hand joint drives with higher actuator effort for slippery or elongated objects.
+    # stiffness: how strongly joints pull toward target qpos; higher = firmer grasp.
+    stiffness: 1500
+    # damping: how much motion is damped near the target; higher = less oscillation / overshoot.
+    damping: 140
+    # force_limit: maximum actuator effort available to maintain the hand target under load.
+    force_limit: 200
+    # friction: joint-drive friction term inside the controller, not fingertip contact friction.
+    friction: 0.0
+
+  stronger_grasp_v3:
+    description: Very strong RC5 hand joint drives for maximum retention stress-testing during lift.
+    # stiffness: how strongly joints pull toward target qpos; higher = firmer grasp.
+    stiffness: 2000
+    # damping: how much motion is damped near the target; higher = less oscillation / overshoot.
+    damping: 180
+    # force_limit: maximum actuator effort available to maintain the hand target under load.
+    force_limit: 300
+    # friction: joint-drive friction term inside the controller, not fingertip contact friction.
+    friction: 0.0

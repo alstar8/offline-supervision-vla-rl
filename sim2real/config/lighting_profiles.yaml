@@ -1,0 +1,132 @@
+profiles:
+  tabletop_clear_shadows: # Базовый вариант с хорошо читаемыми тенями от руки и объектов.
+    ambient_light: [0.22, 0.22, 0.22]
+    clear_color: [0.62, 0.62, 0.62, 1.0]
+    directional_lights: []
+    point_lights:
+      - position: [-0.10, -1.15, 1.60]
+        color: [1.25, 1.25, 1.25]
+        shadow: true
+      - position: [0.35, -0.95, 1.40]
+        color: [0.25, 0.25, 0.25]
+        shadow: false
+
+  tabletop_side_shadows_left: # Тени смещены влево относительно камеры, удобно для аугментации направления света.
+    ambient_light: [0.18, 0.18, 0.18]
+    clear_color: [0.62, 0.62, 0.62, 1.0]
+    directional_lights: []
+    point_lights:
+      - position: [0.38, -1.05, 1.55]
+        color: [1.20, 1.20, 1.20]
+        shadow: true
+      - position: [-0.30, -0.92, 1.35]
+        color: [0.18, 0.18, 0.18]
+        shadow: false
+
+  tabletop_side_shadows_right: # Тени смещены вправо относительно камеры, парный профиль к left-варианту.
+    ambient_light: [0.18, 0.18, 0.18]
+    clear_color: [0.62, 0.62, 0.62, 1.0]
+    directional_lights: []
+    point_lights:
+      - position: [-0.42, -1.05, 1.55]
+        color: [1.20, 1.20, 1.20]
+        shadow: true
+      - position: [0.28, -0.92, 1.35]
+        color: [0.18, 0.18, 0.18]
+        shadow: false
+
+  tabletop_hard_shadows_left: # Жёсткие и контрастные тени, смещённые влево, для сильной аугментации.
+    ambient_light: [0.12, 0.12, 0.12]
+    clear_color: [0.62, 0.62, 0.62, 1.0]
+    directional_lights: []
+    point_lights:
+      - position: [0.52, -1.08, 1.62]
+        color: [1.35, 1.35, 1.35]
+        shadow: true
+      - position: [-0.36, -0.88, 1.30]
+        color: [0.10, 0.10, 0.10]
+        shadow: false
+
+  tabletop_hard_shadows_right: # Жёсткие и контрастные тени, смещённые вправо, зеркальный вариант.
+    ambient_light: [0.12, 0.12, 0.12]
+    clear_color: [0.62, 0.62, 0.62, 1.0]
+    directional_lights: []
+    point_lights:
+      - position: [-0.56, -1.08, 1.62]
+        color: [1.35, 1.35, 1.35]
+        shadow: true
+      - position: [0.34, -0.88, 1.30]
+        color: [0.10, 0.10, 0.10]
+        shadow: false
+
+  tabletop_object_shadows_left: # Низкий скользящий свет слева; тени от лежащих на столе объектов читаются лучше.
+    ambient_light: [0.10, 0.10, 0.10]
+    clear_color: [0.62, 0.62, 0.62, 1.0]
+    directional_lights: []
+    point_lights:
+      - position: [0.55, -0.95, 0.95]
+        color: [1.45, 1.45, 1.45]
+        shadow: true
+      - position: [-0.30, -0.90, 1.35]
+        color: [0.08, 0.08, 0.08]
+        shadow: false
+
+  tabletop_object_shadows_right: # Низкий скользящий свет справа; зеркальный вариант под object-shadow augmentation.
+    ambient_light: [0.10, 0.10, 0.10]
+    clear_color: [0.62, 0.62, 0.62, 1.0]
+    directional_lights: []
+    point_lights:
+      - position: [-0.55, -0.95, 0.95]
+        color: [1.45, 1.45, 1.45]
+        shadow: true
+      - position: [0.30, -0.90, 1.35]
+        color: [0.08, 0.08, 0.08]
+        shadow: false
+
+  tabletop_soft_shadows: # Более мягкие и менее контрастные тени при сохранении общей читаемости сцены.
+    ambient_light: [0.30, 0.30, 0.30]
+    clear_color: [0.62, 0.62, 0.62, 1.0]
+    directional_lights: []
+    point_lights:
+      - position: [-0.10, -1.15, 1.60]
+        color: [1.05, 1.05, 1.05]
+        shadow: true
+      - position: [0.35, -0.95, 1.40]
+        color: [0.35, 0.35, 0.35]
+        shadow: false
+
+  tabletop_soft_shadows_left: # Мягкие тени со смещением влево, полезно для щадящей аугментации направления.
+    ambient_light: [0.32, 0.32, 0.32]
+    clear_color: [0.62, 0.62, 0.62, 1.0]
+    directional_lights: []
+    point_lights:
+      - position: [0.30, -1.05, 1.55]
+        color: [1.00, 1.00, 1.00]
+        shadow: true
+      - position: [-0.28, -0.90, 1.35]
+        color: [0.32, 0.32, 0.32]
+        shadow: false
+
+  tabletop_soft_shadows_right: # Мягкие тени со смещением вправо, зеркальный вариант к soft-left.
+    ambient_light: [0.32, 0.32, 0.32]
+    clear_color: [0.62, 0.62, 0.62, 1.0]
+    directional_lights: []
+    point_lights:
+      - position: [-0.34, -1.05, 1.55]
+        color: [1.00, 1.00, 1.00]
+        shadow: true
+      - position: [0.28, -0.90, 1.35]
+        color: [0.32, 0.32, 0.32]
+        shadow: false
+
+  tabletop_topdown_soft: # Почти верхний свет с мягкими локальными тенями, близко к текущему debug-стилю.
+    ambient_light: [0.22, 0.22, 0.22]
+    clear_color: [0.62, 0.62, 0.62, 1.0]
+    directional_lights: []
+    point_lights:
+      - position: [-0.10, -1.15, 1.60]
+        color: [1.10, 1.10, 1.10]
+        shadow: true
+      - position: [0.35, -0.95, 1.40]
+        color: [0.22, 0.22, 0.22]
+        shadow: false
