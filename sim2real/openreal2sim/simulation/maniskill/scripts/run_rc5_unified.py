@@ -16,9 +16,13 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
+MANISKILL_ROOT = Path(__file__).resolve().parents[1]
 repo_root_str = str(REPO_ROOT)
 if repo_root_str not in sys.path:
     sys.path.insert(0, repo_root_str)
+# Host runs need `motion.*` (planner debug solver). Docker historically used PYTHONPATH=/app.
+if str(MANISKILL_ROOT) not in sys.path:
+    sys.path.append(str(MANISKILL_ROOT))
 
 from openreal2sim.simulation.maniskill.scripts.rc5_unified_bootstrap import (
     detect_config_key,
@@ -749,8 +753,15 @@ def _resolve_singleton_requested_artifact_path(
     return Path(str(raw_value)).expanduser().resolve()
 
 
-def _build_default_run_instruction(*, task_type: str, task_semantic_name: str) -> str:
+def _build_default_run_instruction(
+    *,
+    task_type: str,
+    task_semantic_name: str,
+    task_object_id: str | None = None,
+) -> str:
     if task_type == TASK_PICK_UP:
+        if str(task_object_id or "") == "orange_cube_ext":
+            return "Pick red cube"
         return f"Pick up {task_semantic_name}."
     return f"{task_type}:{task_semantic_name}"
 
@@ -826,6 +837,7 @@ def _materialize_default_runtime_request(
         "dense_episode_instruction": _build_default_run_instruction(
             task_type=str(args.task_type),
             task_semantic_name=task_semantic_name,
+            task_object_id=str(args.task_object_id) if args.task_object_id else None,
         ),
         "dense_episode_image_width": int(args.dense_episode_image_width),
         "dense_episode_image_height": int(args.dense_episode_image_height),
@@ -1379,6 +1391,8 @@ def _clone_runtime_config_with_episode_placement(
 
 def _build_episode_instruction(request: CollectionRequest, *, task_semantic_name: str) -> str:
     if request.task_type == TASK_PICK_UP:
+        if str(request.task_object_id) == "orange_cube_ext":
+            return "Pick red cube"
         return f"Pick up {task_semantic_name}."
     return f"{request.task_type}:{task_semantic_name}"
 

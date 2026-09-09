@@ -297,6 +297,15 @@ local:
       placement_mode: "fixed"
       manip_object_id: blue_cube_ext # тут задается ID обьекта который будет захватываться
 
+      # Used only when placement_mode is "random" (RL gym). Planner stays on "fixed".
+      random_placement:
+        bounds_min: [-0.38, -0.90]
+        bounds_max: [0.05, -0.52]
+        table_margin: 0.0
+        min_robot_clearance: 0.28
+        pair_gap: 0.015
+        max_attempts: 80
+
       # список обьектов на сцене
       include_objects:
         #- plate_ext

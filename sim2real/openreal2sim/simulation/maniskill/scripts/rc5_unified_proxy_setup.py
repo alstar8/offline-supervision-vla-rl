@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
 from contextlib import contextmanager
 from pathlib import Path
@@ -33,7 +34,7 @@ from openreal2sim.simulation.maniskill.scripts.rc5_unified_proxy_lowlevel import
     get_required_pregrasp_joint_guard_config,
     get_required_planner_waypoints_config,
 )
-from openreal2sim.simulation.maniskill.utils.scene_loader import DEFAULT_CAMERAS_CONFIG, load_cameras_config
+from openreal2sim.simulation.maniskill.utils.scene_loader import DEFAULT_CAMERAS_CONFIG, load_cameras_config, remap_object_placement_paths
 
 DEFAULT_RENDERER_MAX_NUM_MATERIALS = 20000
 DEFAULT_RENDERER_MAX_NUM_TEXTURES = 20000
@@ -390,6 +391,11 @@ def load_runner_config(args):
         include_objects=None,
         exclude_objects=None,
         manip_object_id=None,
+        task_description=None,
+        use_wrist_camera=False,
+        use_360_background=False,
+        pano_photos_dir=None,
+        pano_sphere_radius=None,
         object_material=None,
         hand_contact_material=None,
         hand_contact=None,
@@ -495,6 +501,11 @@ def load_runner_config(args):
         config_overrides["include_objects"] = pick("include_objects", None)
         config_overrides["exclude_objects"] = pick("exclude_objects", None)
         config_overrides["manip_object_id"] = pick("manip_object_id", None)
+        config_overrides["task_description"] = pick("task_description", None)
+        config_overrides["use_wrist_camera"] = bool(pick("use_wrist_camera", False))
+        config_overrides["use_360_background"] = bool(pick("use_360_background", False))
+        config_overrides["pano_photos_dir"] = pick("pano_photos_dir", None)
+        config_overrides["pano_sphere_radius"] = pick("pano_sphere_radius", None)
         config_overrides["object_material"] = pick("object_material", None)
         config_overrides["hand_contact_material"] = pick("hand_contact_material", None)
         config_overrides["hand_contact"] = pick("hand_contact", None)
@@ -659,6 +670,9 @@ def load_runner_config(args):
     if cli_manip_object_id is not None:
         config_overrides["manip_object_id"] = str(cli_manip_object_id)
         print(f"[Info] CLI override: manip_object_id={config_overrides['manip_object_id']}")
+    cli_use_wrist_camera = getattr(args, "use_wrist_camera", None)
+    if cli_use_wrist_camera is not None:
+        config_overrides["use_wrist_camera"] = bool(cli_use_wrist_camera)
     _apply_object_specific_robot_init_qpos_profile(
         config_overrides,
         cli_override=args.robot_init_qpos is not None,
@@ -906,25 +920,25 @@ def apply_hand_pose_overrides(agent, args, config_overrides):
     )
 
 
-def make_env(args, config_overrides, render_mode="human"):
+def openreal2sim_env_kwargs_from_config(args, config_overrides, *, render_mode="human", obs_mode="state"):
     viewer_camera_configs = {
         "viewer": {
-            "width": args.window_width,
-            "height": args.window_height,
+            "width": getattr(args, "window_width", 512),
+            "height": getattr(args, "window_height", 512),
         }
     }
     env_kwargs = {
         "scene_json_path": args.scene,
-        "robot_uids": args.robot_uids,
-        "num_envs": args.num_envs,
-        "obs_mode": "state",
+        "robot_uids": config_overrides["robot_uids"],
+        "num_envs": getattr(args, "num_envs", 1),
+        "obs_mode": obs_mode,
         "control_mode": config_overrides["control_mode"],
         "render_mode": render_mode,
-        "render_backend": args.render_backend,
+        "render_backend": getattr(args, "render_backend", "gpu"),
         "viewer_camera_configs": viewer_camera_configs,
-        "render_width": args.cam_width,
-        "render_height": args.cam_height,
-        "robot_init_qpos_noise": args.robot_init_qpos_noise,
+        "render_width": getattr(args, "cam_width", 640),
+        "render_height": getattr(args, "cam_height", 480),
+        "robot_init_qpos_noise": getattr(args, "robot_init_qpos_noise", 0.0),
         "settle_steps": 0,
         "auto_placement": config_overrides["auto_placement"],
         "cameras_config": config_overrides["cameras_config"],
@@ -939,43 +953,98 @@ def make_env(args, config_overrides, render_mode="human"):
         "physx_contact_offset": config_overrides["physx_contact_offset"],
         "physx_rest_offset": config_overrides["physx_rest_offset"],
         "placement_mode": config_overrides["placement_mode"],
-        "robot_uids": config_overrides["robot_uids"],
     }
-    if args.sim_backend is not None:
+    if getattr(args, "sim_backend", None) is not None:
         env_kwargs["sim_backend"] = args.sim_backend
-    if config_overrides["object_placements"] is not None:
-        env_kwargs["object_placements"] = config_overrides["object_placements"]
-    if config_overrides["random_placement"] is not None:
+    if config_overrides.get("object_placements") is not None:
+        env_kwargs["object_placements"] = remap_object_placement_paths(config_overrides["object_placements"])
+    if config_overrides.get("random_placement") is not None:
         env_kwargs["random_placement"] = config_overrides["random_placement"]
-    if config_overrides["include_objects"] is not None:
+    if config_overrides.get("include_objects") is not None:
         env_kwargs["include_objects"] = config_overrides["include_objects"]
-    if config_overrides["exclude_objects"] is not None:
+    if config_overrides.get("exclude_objects") is not None:
         env_kwargs["exclude_objects"] = config_overrides["exclude_objects"]
-    if config_overrides["manip_object_id"] is not None:
+    if config_overrides.get("manip_object_id") is not None:
         env_kwargs["manip_object_id"] = config_overrides["manip_object_id"]
-    if config_overrides["object_material"] is not None:
+    if config_overrides.get("task_description") is not None:
+        env_kwargs["task_description"] = config_overrides["task_description"]
+    if config_overrides.get("use_wrist_camera"):
+        env_kwargs["use_wrist_camera"] = bool(config_overrides["use_wrist_camera"])
+    if config_overrides.get("use_360_background"):
+        env_kwargs["use_360_background"] = bool(config_overrides["use_360_background"])
+        if config_overrides.get("pano_photos_dir") is not None:
+            env_kwargs["pano_photos_dir"] = config_overrides["pano_photos_dir"]
+        if config_overrides.get("pano_sphere_radius") is not None:
+            env_kwargs["pano_sphere_radius"] = config_overrides["pano_sphere_radius"]
+    if config_overrides.get("object_material") is not None:
         env_kwargs["object_material"] = config_overrides["object_material"]
-    if config_overrides["hand_contact_material"] is not None:
+    if config_overrides.get("hand_contact_material") is not None:
         env_kwargs["hand_contact_material"] = config_overrides["hand_contact_material"]
-    if config_overrides["hand_contact"] is not None:
+    if config_overrides.get("hand_contact") is not None:
         env_kwargs["hand_contact"] = config_overrides["hand_contact"]
-    if config_overrides["arm_controller"] is not None:
+    if config_overrides.get("arm_controller") is not None:
         env_kwargs["arm_controller"] = config_overrides["arm_controller"]
-    if config_overrides["hand_controller"] is not None:
+    if config_overrides.get("hand_controller") is not None:
         env_kwargs["hand_controller"] = config_overrides["hand_controller"]
-    if config_overrides["robot_base_pose"] is not None:
+    if config_overrides.get("robot_base_pose") is not None:
         env_kwargs["robot_base_pose"] = list(config_overrides["robot_base_pose"])
-    if config_overrides["robot_init_qpos"] is not None:
+    if config_overrides.get("robot_init_qpos") is not None:
         env_kwargs["robot_init_qpos"] = list(config_overrides["robot_init_qpos"])
-    if args.cam_eye is not None and args.cam_target is not None:
+    if getattr(args, "cam_eye", None) is not None and getattr(args, "cam_target", None) is not None:
         env_kwargs["render_camera_eye"] = list(args.cam_eye)
         env_kwargs["render_camera_target"] = list(args.cam_target)
+    return env_kwargs
+
+
+def make_env(args, config_overrides, render_mode="human"):
+    env_kwargs = openreal2sim_env_kwargs_from_config(
+        args, config_overrides, render_mode=render_mode, obs_mode="state"
+    )
     OpenReal2SimEnv = _load_openreal2sim_env_class()
     return OpenReal2SimEnv(**env_kwargs)
 
 
+def _episode_id_from_runtime_request_payload(payload: dict) -> int:
+    seed = payload.get("placement_seed")
+    if seed is None:
+        seed = payload.get("episode_index", 0)
+    return int(seed)
+
+
+def build_reset_options_from_args(args) -> dict | None:
+    """Seed random placements / 360 background from collection runtime requests."""
+    paths: list[str] = []
+    per_env_json = getattr(args, "runtime_request_path_per_env_json", None)
+    singleton = getattr(args, "runtime_request_path", None)
+    if per_env_json:
+        parsed = json.loads(per_env_json) if isinstance(per_env_json, str) else per_env_json
+        if not isinstance(parsed, list) or not parsed:
+            return None
+        paths = [str(item) for item in parsed]
+    elif singleton:
+        paths = [str(singleton)]
+    if not paths:
+        return None
+    episode_ids: list[int] = []
+    for raw_path in paths:
+        path = Path(raw_path).expanduser()
+        if not path.exists():
+            return None
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return None
+        episode_ids.append(_episode_id_from_runtime_request_payload(payload))
+    if len(episode_ids) == 1:
+        return {"episode_id": episode_ids[0]}
+    return {"episode_id": episode_ids}
+
+
 def reset_and_prepare(env, args, control_mode, gripper_hold_signal=None):
-    env.reset()
+    reset_options = build_reset_options_from_args(args)
+    if reset_options is None:
+        env.reset()
+    else:
+        env.reset(options=reset_options)
     _refresh_render_state(env)
     _apply_custom_camera_pose_if_needed(env)
     stabilize_control_mode = shared_select_startup_stabilize_control_mode(

@@ -5,7 +5,10 @@ historical real2sim / teleop stack, while still integrating with the current
 ManiSkill controller API.
 """
 
+import importlib.util
+import inspect
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional, Sequence
 
 import numpy as np
@@ -14,6 +17,30 @@ import torch
 from mani_skill.agents.controllers.pd_ee_pose import PDEEPoseController, PDEEPoseControllerConfig
 from mani_skill.utils.geometry.rotation_conversions import euler_angles_to_matrix, matrix_to_quaternion
 from mani_skill.utils.structs import Pose
+
+_VENDOR_KINEMATICS_PATH = (
+    Path(__file__).resolve().parents[4]
+    / "mani_skill"
+    / "agents"
+    / "controllers"
+    / "utils"
+    / "kinematics.py"
+)
+
+
+def _load_vendored_kinematics_cls():
+    spec = importlib.util.spec_from_file_location(
+        "openr2s_vendored_kinematics",
+        _VENDOR_KINEMATICS_PATH,
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not load vendored kinematics from {_VENDOR_KINEMATICS_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.Kinematics
+
+
+_VENDORED_KINEMATICS_CLS = _load_vendored_kinematics_cls()
 
 
 def _debug_numpy(value):
@@ -137,6 +164,25 @@ class LegacyAlignPDEEPoseController(PDEEPoseController):
                 )
         self._ik_config_validated = True
 
+    def _compute_ik_target_qpos(self, target_pose, q0, **kwargs):
+        # Planner uses sim2real's Kinematics (current_pose / solver_config / preferred_qpos).
+        # PPO uses the parent ManiSkill Kinematics; attach the local target-delta solver so
+        # RC5 actions stay on the same IK as the real robot / planner.
+        supported = getattr(self, "_compute_ik_params", None)
+        if supported is None:
+            supported = inspect.signature(self.kinematics.compute_ik).parameters
+            self._compute_ik_params = supported
+        if "current_pose" in supported:
+            filtered = {key: value for key, value in kwargs.items() if key in supported}
+            return self.kinematics.compute_ik(target_pose, q0, **filtered)
+        kinematics = self.kinematics
+        if not getattr(kinematics, "_openr2s_local_delta_ik", False):
+            kinematics._solve_damped_least_squares = (
+                _VENDORED_KINEMATICS_CLS._solve_damped_least_squares
+            )
+            kinematics._openr2s_local_delta_ik = True
+        return _VENDORED_KINEMATICS_CLS.compute_ik(kinematics, target_pose, q0, **kwargs)
+
     def reset(self):
         super().reset()
         self._validate_ik_runtime_config()
@@ -238,7 +284,7 @@ class LegacyAlignPDEEPoseController(PDEEPoseController):
         ik_q0 = q0_current if use_local_target_ik else q0_seed
         current_pose = self.ee_pose_at_base if use_local_target_ik else None
         solver_config = dict(self.config.delta_solver_config) if use_local_target_ik else None
-        self._target_qpos = self.kinematics.compute_ik(
+        self._target_qpos = self._compute_ik_target_qpos(
             self._target_pose,
             ik_q0,
             pos_only=pos_only,

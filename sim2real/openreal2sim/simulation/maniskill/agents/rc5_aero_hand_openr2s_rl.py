@@ -56,7 +56,7 @@ class RC5AeroHandOpenR2S_RL(RC5AeroHandOpenR2S):
             ik_seed_joint5_gain=0.85,
             diagnostic_joint5_delta_threshold_rad=0.35,
             diagnostic_arm_delta_norm_threshold_rad=0.75,
-            raise_on_ik_failure=True,
+            raise_on_ik_failure=False,
         )
         hand_controller = RCPresetHandControllerConfig(
             joint_names=self.hand_joint_names,

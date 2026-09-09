@@ -591,6 +591,57 @@ def test_collection_runtime_inputs_propagate_disabled_embedded_runtime_bundle_fl
 
     assert "--no-embed_runtime_bundle_in_rl4vla_raw_npz" in runtime_request["runner_argv"]
     assert "--embed_runtime_bundle_in_rl4vla_raw_npz" not in runtime_request["runner_argv"]
+    assert runtime_request["dense_episode_instruction"] == "Pick red cube"
+    assert "--dense_episode_instruction" in runtime_request["runner_argv"]
+    instruction_idx = runtime_request["runner_argv"].index("--dense_episode_instruction")
+    assert runtime_request["runner_argv"][instruction_idx + 1] == "Pick red cube"
+
+
+def test_collection_runtime_sim_patch_enables_latest_pick_red_cube_env(tmp_path):
+    cfg_path = _write_config(tmp_path, teleop=True, unified_planner_backend="proxy")
+    patch_path = tmp_path / "runtime_sim_patch.yaml"
+    patch_path.write_text(
+        yaml.safe_dump(
+            {
+                "use_wrist_camera": True,
+                "use_360_background": True,
+                "task_description": "Pick red cube",
+                "placement_mode": "random",
+                "manip_object_id": "orange_cube_ext",
+            }
+        ),
+        encoding="utf-8",
+    )
+    request = uut.resolve_collection_request(
+        [
+            "--run_mode",
+            "collection",
+            "--config_path",
+            str(cfg_path),
+            "--key",
+            "demo_key",
+            "--scene",
+            "assets/scenes/demo_key/simulation/scene.json",
+            "--output_dir",
+            str(tmp_path / "collection_out"),
+            "--task_object_id",
+            "orange_cube_ext",
+            "--placement_seed_start",
+            "0",
+            "--num_episodes",
+            "1",
+            "--runtime_sim_patch",
+            str(patch_path),
+        ]
+    )
+    runtime_inputs = uut.materialize_episode_runtime_inputs(request)
+    runtime_config = yaml.safe_load(Path(runtime_inputs[0].config_path).read_text(encoding="utf-8"))
+    simulation = runtime_config["local"]["demo_key"]["simulation"]
+    assert simulation["placement_mode"] == "random"
+    assert simulation["use_wrist_camera"] is True
+    assert simulation["use_360_background"] is True
+    assert simulation["task_description"] == "Pick red cube"
+    assert simulation["manip_object_id"] == "orange_cube_ext"
 
 
 def test_rc5_unified_main_writes_batch_summary_for_batched_proxy_request(tmp_path, monkeypatch):

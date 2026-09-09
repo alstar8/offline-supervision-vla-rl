@@ -1073,6 +1073,8 @@ def _build_episode_object_pose_trace_path(episode_dir: Path) -> Path:
 
 def _build_episode_instruction(request: CollectionRequest, *, task_semantic_name: str) -> str:
     if request.task_type == TASK_PICK_UP:
+        if str(request.task_object_id) == "orange_cube_ext":
+            return "Pick red cube"
         return f"Pick up {task_semantic_name}."
     return f"{request.task_type}:{task_semantic_name}"
 

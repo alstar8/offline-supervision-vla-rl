@@ -261,3 +261,32 @@ def test_build_rl4vla_raw_episode_payload_accepts_preencoded_images():
             result={"success": True},
             source={"planner_backend": "proxy_ee_delta"},
         )
+
+
+def test_build_rl4vla_raw_episode_payload_stores_wrist_camera_images():
+    payload = build_rl4vla_raw_episode_payload(
+        instruction="Pick red cube",
+        images=[
+            np.zeros((4, 4, 3), dtype=np.uint8),
+            np.ones((4, 4, 3), dtype=np.uint8),
+            np.full((4, 4, 3), 2, dtype=np.uint8),
+        ],
+        wrist_images=[
+            np.full((6, 8, 3), 9, dtype=np.uint8),
+            np.full((6, 8, 3), 8, dtype=np.uint8),
+            np.full((6, 8, 3), 7, dtype=np.uint8),
+        ],
+        actions=[
+            np.zeros((7,), dtype=np.float32),
+            np.ones((7,), dtype=np.float32),
+        ],
+        infos=[{"success": False}, {"success": True}],
+        result={"semantic_task_success": True},
+        source={"planner_backend": "proxy_ee_delta"},
+    )
+
+    assert payload["camera_names"] == ["base_camera", "wrist_camera"]
+    assert isinstance(payload["image_wrist"], list)
+    assert len(payload["image_wrist"]) == 2
+    assert decode_rl4vla_raw_episode_images(payload).shape == (2, 480, 640, 3)
+    assert decode_rl4vla_raw_episode_images(payload, key="image_wrist").shape == (2, 480, 640, 3)

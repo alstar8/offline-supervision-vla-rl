@@ -26,6 +26,9 @@ DEFAULT_VIDEO_FORMAT = "mp4"
 _ACTIVE_UNIFIED_DENSE_EPISODE_CAPTURE = None
 
 
+WRIST_CAMERA_NAME = "wrist_camera"
+
+
 @dataclass
 class UnifiedDenseEpisodeCapture:
     output_path: Path | None
@@ -40,7 +43,9 @@ class UnifiedDenseEpisodeCapture:
     image_target_height: int
     num_envs: int
     images_per_env: list[list]
+    wrist_images_per_env: list[list]
     rl4vla_preencoded_images_per_env: list[list] | None
+    rl4vla_preencoded_wrist_images_per_env: list[list] | None
     actions_per_env: list[list]
     infos_per_env: list[list]
     shared_video_frame_targets_per_env: list[list] | None
@@ -69,12 +74,18 @@ def normalize_video_frame(frame):
     return frame
 
 
-def capture_base_camera_frames(env):
-    env.unwrapped.scene.update_render()
-    env.unwrapped.capture_sensor_data()
-    sensor = env.unwrapped.scene.sensors.get("base_camera")
+def capture_named_camera_frames(env, camera_name, *, required=True, capture=True):
+    if capture:
+        env.unwrapped.scene.update_render()
+        env.unwrapped.capture_sensor_data()
+    sensors = getattr(getattr(env.unwrapped, "scene", None), "sensors", None) or {}
+    sensor = sensors.get(camera_name) if hasattr(sensors, "get") else None
     if sensor is None:
-        raise RuntimeError("base_camera sensor is not available; cannot capture video frame.")
+        if required:
+            raise RuntimeError(
+                f"{camera_name} sensor is not available; cannot capture video frame."
+            )
+        return None
     obs = sensor.get_obs(rgb=True, depth=False, position=False, segmentation=False)
     frame = obs.get("rgb", obs.get("Color"))
     if isinstance(frame, torch.Tensor):
@@ -85,11 +96,26 @@ def capture_base_camera_frames(env):
     return [normalize_video_frame(frame)]
 
 
+def capture_base_camera_frames(env):
+    return capture_named_camera_frames(env, "base_camera", required=True, capture=True)
+
+
 def capture_base_camera_frame(env):
     frames = capture_base_camera_frames(env)
     if not frames:
         raise RuntimeError("base_camera sensor did not produce any frames.")
     return frames[0]
+
+
+def capture_episode_camera_frames(env):
+    base_frames = capture_base_camera_frames(env)
+    wrist_frames = capture_named_camera_frames(
+        env,
+        WRIST_CAMERA_NAME,
+        required=False,
+        capture=False,
+    )
+    return base_frames, wrist_frames
 
 
 def resolve_batched_dense_episode_output_path(output_dir, *, env_index: int) -> Path:
@@ -412,7 +438,13 @@ def start_unified_dense_episode_capture(
         image_target_height=int(image_target_height),
         num_envs=normalized_num_envs,
         images_per_env=[[] for _ in range(normalized_num_envs)],
+        wrist_images_per_env=[[] for _ in range(normalized_num_envs)],
         rl4vla_preencoded_images_per_env=(
+            None
+            if resolved_rl4vla_raw_output_path is None and resolved_rl4vla_raw_output_dir is None
+            else [[] for _ in range(normalized_num_envs)]
+        ),
+        rl4vla_preencoded_wrist_images_per_env=(
             None
             if resolved_rl4vla_raw_output_path is None and resolved_rl4vla_raw_output_dir is None
             else [[] for _ in range(normalized_num_envs)]
@@ -430,7 +462,25 @@ def get_active_unified_dense_episode_capture():
     return _ACTIVE_UNIFIED_DENSE_EPISODE_CAPTURE
 
 
-def _append_frame_to_dense_capture(capture: UnifiedDenseEpisodeCapture, *, env_index: int, frame) -> None:
+def _append_encoded_frame(target, frame, *, width: int, height: int) -> None:
+    target.append(
+        _encode_frame_to_jpeg_uint8_buffer(
+            _resize_frame_to_canvas(
+                frame,
+                target_width=width,
+                target_height=height,
+            )
+        )
+    )
+
+
+def _append_frame_to_dense_capture(
+    capture: UnifiedDenseEpisodeCapture,
+    *,
+    env_index: int,
+    frame,
+    wrist_frame=None,
+) -> None:
     capture.images_per_env[env_index].append(frame)
     shared_targets = capture.shared_video_frame_targets_per_env
     if shared_targets is not None:
@@ -439,31 +489,70 @@ def _append_frame_to_dense_capture(capture: UnifiedDenseEpisodeCapture, *, env_i
             target.append(frame)
     preencoded = capture.rl4vla_preencoded_images_per_env
     if preencoded is not None:
-        preencoded[env_index].append(
-            _encode_frame_to_jpeg_uint8_buffer(
-                _resize_frame_to_canvas(
-                    frame,
-                    target_width=capture.image_target_width,
-                    target_height=capture.image_target_height,
-                )
-            )
+        _append_encoded_frame(
+            preencoded[env_index],
+            frame,
+            width=capture.image_target_width,
+            height=capture.image_target_height,
         )
+    if wrist_frame is None:
+        return
+    capture.wrist_images_per_env[env_index].append(wrist_frame)
+    preencoded_wrist = capture.rl4vla_preencoded_wrist_images_per_env
+    if preencoded_wrist is not None:
+        _append_encoded_frame(
+            preencoded_wrist[env_index],
+            wrist_frame,
+            width=capture.image_target_width,
+            height=capture.image_target_height,
+        )
+
+
+def _wrist_frames_for_env(capture: UnifiedDenseEpisodeCapture, env_index: int):
+    wrist_frames = capture.wrist_images_per_env[env_index]
+    if not wrist_frames:
+        return None
+    if len(wrist_frames) != len(capture.images_per_env[env_index]):
+        raise RuntimeError(
+            "Dense episode wrist/base frame count mismatch: "
+            f"env={env_index} wrist={len(wrist_frames)} base={len(capture.images_per_env[env_index])}."
+        )
+    return wrist_frames
+
+
+def _wrist_preencoded_for_env(capture: UnifiedDenseEpisodeCapture, env_index: int, wrist_frames):
+    if wrist_frames is None or capture.rl4vla_preencoded_wrist_images_per_env is None:
+        return None
+    candidate = capture.rl4vla_preencoded_wrist_images_per_env[env_index]
+    if len(candidate) != len(wrist_frames):
+        return None
+    return candidate
 
 
 def append_dense_episode_initial_frame_if_enabled(env):
     capture = _ACTIVE_UNIFIED_DENSE_EPISODE_CAPTURE
     if capture is None:
         return
-    frames = capture_base_camera_frames(env)
+    frames, wrist_frames = capture_episode_camera_frames(env)
     if len(frames) != capture.num_envs:
         raise RuntimeError(
             "Dense episode capture expected one base_camera frame per env, "
             f"got {len(frames)} frames for num_envs={capture.num_envs}."
         )
+    if wrist_frames is not None and len(wrist_frames) != capture.num_envs:
+        raise RuntimeError(
+            "Dense episode capture expected one wrist_camera frame per env, "
+            f"got {len(wrist_frames)} frames for num_envs={capture.num_envs}."
+        )
     for env_index, frame in enumerate(frames):
         if env_index in capture.finalized_env_indices:
             continue
-        _append_frame_to_dense_capture(capture, env_index=env_index, frame=frame)
+        _append_frame_to_dense_capture(
+            capture,
+            env_index=env_index,
+            frame=frame,
+            wrist_frame=None if wrist_frames is None else wrist_frames[env_index],
+        )
 
 
 def _normalize_dense_episode_info(info):
@@ -537,18 +626,28 @@ def record_dense_episode_step_if_enabled(env, batched_action, step_result):
             f"Dense episode recording expected batched action first dimension {num_envs}, got {action_arr.shape}."
         )
     per_env_infos = _normalize_dense_episode_infos(info, num_envs=num_envs)
-    frames = capture_base_camera_frames(env)
+    frames, wrist_frames = capture_episode_camera_frames(env)
     if len(frames) != num_envs:
         raise RuntimeError(
             "Dense episode capture expected one base_camera frame per env after step, "
             f"got {len(frames)} frames for num_envs={num_envs}."
+        )
+    if wrist_frames is not None and len(wrist_frames) != num_envs:
+        raise RuntimeError(
+            "Dense episode capture expected one wrist_camera frame per env after step, "
+            f"got {len(wrist_frames)} frames for num_envs={num_envs}."
         )
     for env_index in range(num_envs):
         if env_index in capture.finalized_env_indices:
             continue
         capture.actions_per_env[env_index].append(action_arr[env_index].copy())
         capture.infos_per_env[env_index].append(per_env_infos[env_index])
-        _append_frame_to_dense_capture(capture, env_index=env_index, frame=frames[env_index])
+        _append_frame_to_dense_capture(
+            capture,
+            env_index=env_index,
+            frame=frames[env_index],
+            wrist_frame=None if wrist_frames is None else wrist_frames[env_index],
+        )
 
 
 def _write_batched_dense_episode_artifact_for_env(
@@ -577,6 +676,7 @@ def _write_batched_dense_episode_artifact_for_env(
             images=capture.images_per_env[env_index],
             actions=capture.actions_per_env[env_index],
             infos=capture.infos_per_env[env_index],
+            wrist_images=_wrist_frames_for_env(capture, env_index),
             result={
                 "exit_code": int(exit_code),
                 "execution_outcome": "success" if int(exit_code) == 0 else "failed",
@@ -629,6 +729,12 @@ def _write_batched_dense_episode_artifact_for_env(
             "image_target_width": capture.image_target_width,
             "image_target_height": capture.image_target_height,
             "preencoded_images": preencoded_images,
+            "wrist_images": _wrist_frames_for_env(capture, env_index),
+            "preencoded_wrist_images": _wrist_preencoded_for_env(
+                capture,
+                env_index,
+                _wrist_frames_for_env(capture, env_index),
+            ),
             "embedded_runtime_config_yaml": _read_optional_text_file(
                 capture.runtime_config_paths_per_env[env_index],
                 label=f"runtime_config_paths_per_env[{env_index}]",
@@ -682,8 +788,11 @@ def finalize_batched_dense_episode_env_if_available(
         failed_stage=failed_stage,
     )
     capture.images_per_env[normalized_env_index] = []
+    capture.wrist_images_per_env[normalized_env_index] = []
     if capture.rl4vla_preencoded_images_per_env is not None:
         capture.rl4vla_preencoded_images_per_env[normalized_env_index] = []
+    if capture.rl4vla_preencoded_wrist_images_per_env is not None:
+        capture.rl4vla_preencoded_wrist_images_per_env[normalized_env_index] = []
     capture.actions_per_env[normalized_env_index] = []
     capture.infos_per_env[normalized_env_index] = []
     capture.finalized_env_indices.add(normalized_env_index)
@@ -754,6 +863,7 @@ def write_dense_episode_artifact_if_available(
                 images=capture.images_per_env[0],
                 actions=capture.actions_per_env[0],
                 infos=capture.infos_per_env[0],
+                wrist_images=_wrist_frames_for_env(capture, 0),
                 result={
                     "exit_code": int(exit_code),
                     "execution_outcome": "success" if int(exit_code) == 0 else "failed",
@@ -800,6 +910,12 @@ def write_dense_episode_artifact_if_available(
                 image_target_width=capture.image_target_width,
                 image_target_height=capture.image_target_height,
                 preencoded_images=preencoded_images,
+                wrist_images=_wrist_frames_for_env(capture, 0),
+                preencoded_wrist_images=_wrist_preencoded_for_env(
+                    capture,
+                    0,
+                    _wrist_frames_for_env(capture, 0),
+                ),
                 embedded_runtime_config_yaml=_read_optional_text_file(
                     capture.runtime_config_paths_per_env[0],
                     label="runtime_config_paths_per_env[0]",

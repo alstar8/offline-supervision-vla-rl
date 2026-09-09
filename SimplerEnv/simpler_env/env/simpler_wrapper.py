@@ -1,5 +1,6 @@
 import gymnasium as gym
 import json
+import sys
 import numpy as np
 from pathlib import Path
 import torch
@@ -45,6 +46,39 @@ AIRI_CUBES_V3_ENV_IDS = {
     "PickUpAiriCubeV3-v1",
     "PickUpAiriCubeV3Recorder-v1",
 }
+OPENREAL2SIM_ENV_IDS = {
+    "OpenReal2Sim-v0",
+}
+WIDOWX_DELTA_CONTROL_MODE = "arm_pd_ee_delta_pose_align2_gripper_pd_joint_pos"
+RC5_TARGET_DELTA_CONTROL_MODE = "arm_pd_ee_target_delta_pose_align2_gripper_pd_joint_pos"
+_SIM2REAL_ROOT = Path(__file__).resolve().parents[3] / "sim2real"
+
+
+def _is_openreal2sim_env(env_id: str) -> bool:
+    return env_id in OPENREAL2SIM_ENV_IDS
+
+
+def _control_mode_for_env(env_id: str) -> str:
+    if _is_openreal2sim_env(env_id):
+        return RC5_TARGET_DELTA_CONTROL_MODE
+    return WIDOWX_DELTA_CONTROL_MODE
+
+
+def _ensure_openreal2sim_importable() -> None:
+    sim2real_root = str(_SIM2REAL_ROOT)
+    # Append, do not insert at 0: sim2real vendors its own mani_skill package and
+    # must not shadow the ManiSkill already imported by PPO / SimplerEnv.
+    if sim2real_root not in sys.path:
+        sys.path.append(sim2real_root)
+
+
+def _openreal2sim_rl_gym_kwargs(*, use_wrist_camera: bool) -> dict:
+    # Deferred import: only the reconstructed AIRI-table env needs sim2real.
+    _ensure_openreal2sim_importable()
+    import openreal2sim.simulation.maniskill  # noqa: F401
+    from openreal2sim.simulation.maniskill.rl_gym import build_openreal2sim_rl_gym_kwargs
+
+    return build_openreal2sim_rl_gym_kwargs(use_wrist_camera=use_wrist_camera)
 
 
 def _unnormalize_continuous_action(raw_actions: torch.Tensor, unnorm_state, action_scale: float = 1.0) -> torch.Tensor:
@@ -185,7 +219,13 @@ def _compose_wrist_inset(
 
 def _openvla_obs_image(obs: dict, *, wrist_inset_bottom_right: bool = False) -> torch.Tensor:
     sensor_data = obs["sensor_data"]
-    scene_rgb = sensor_data["3rd_view_camera"]["rgb"]
+    if "3rd_view_camera" in sensor_data and "rgb" in sensor_data["3rd_view_camera"]:
+        scene_rgb = sensor_data["3rd_view_camera"]["rgb"]
+    elif "base_camera" in sensor_data and "rgb" in sensor_data["base_camera"]:
+        scene_rgb = sensor_data["base_camera"]["rgb"]
+    else:
+        available = list(sensor_data.keys()) if isinstance(sensor_data, dict) else type(sensor_data)
+        raise KeyError(f"No scene RGB camera found in sensor_data keys={available}")
     wrist_data = sensor_data.get(WRIST_CAMERA_NAME)
     wrist_rgb = None if wrist_data is None else wrist_data["rgb"]
     return _compose_wrist_inset(scene_rgb, wrist_rgb, bottom_right=wrist_inset_bottom_right)
@@ -198,8 +238,10 @@ class SimlerWrapper:
         self._real2sim_robot_state = None
 
         self.num_envs = self.args.num_envs
-        robot_control_mode = "arm_pd_ee_delta_pose_align2_gripper_pd_joint_pos"
-        self._wrist_inset_bottom_right = bool(self.args.use_wrist_camera) and self.args.env_id in AIRI_CUBES_ENV_IDS
+        robot_control_mode = _control_mode_for_env(self.args.env_id)
+        self._wrist_inset_bottom_right = bool(self.args.use_wrist_camera) and (
+            self.args.env_id in AIRI_CUBES_ENV_IDS or _is_openreal2sim_env(self.args.env_id)
+        )
         self._eval_debug_file = None
         self._eval_debug_step = 0
 
@@ -218,6 +260,8 @@ class SimlerWrapper:
             sensor_configs={"shader_pack": "default"},
             use_wrist_camera=bool(self.args.use_wrist_camera),
         )
+        if _is_openreal2sim_env(self.args.env_id):
+            env_config.update(_openreal2sim_rl_gym_kwargs(use_wrist_camera=bool(self.args.use_wrist_camera)))
         self.env: BaseEnv = gym.make(**env_config)
         self.env.reset(seed=[self.args.seed * 1000 + i + extra_seed for i in range(self.args.num_envs)])
         self._reset_counter = 0
@@ -344,7 +388,7 @@ class SimlerWrapper:
     def reset(self, obj_set: str, same_init: bool = False):
         options = self._real2sim_reset_options()
         options["obj_set"] = obj_set
-        if self.args.env_id in REAL2SIM_RECORDER_ENV_IDS:
+        if self.args.env_id in REAL2SIM_RECORDER_ENV_IDS or _is_openreal2sim_env(self.args.env_id):
             base_episode_id = self.args.seed * 1_000_000 + self._reset_counter * self.num_envs
             options["episode_id"] = (
                 torch.arange(self.num_envs, device=self.env.device, dtype=torch.int64) + base_episode_id
@@ -427,8 +471,10 @@ class SimlerContinuousWrapper:
         self._real2sim_robot_state = None
 
         self.num_envs = self.args.num_envs
-        robot_control_mode = "arm_pd_ee_delta_pose_align2_gripper_pd_joint_pos"
-        self._wrist_inset_bottom_right = bool(self.args.use_wrist_camera) and self.args.env_id in AIRI_CUBES_ENV_IDS
+        robot_control_mode = _control_mode_for_env(self.args.env_id)
+        self._wrist_inset_bottom_right = bool(self.args.use_wrist_camera) and (
+            self.args.env_id in AIRI_CUBES_ENV_IDS or _is_openreal2sim_env(self.args.env_id)
+        )
         self._eval_debug_file = None
         self._eval_debug_step = 0
 
@@ -447,6 +493,8 @@ class SimlerContinuousWrapper:
             sensor_configs={"shader_pack": "default"},
             use_wrist_camera=bool(self.args.use_wrist_camera),
         )
+        if _is_openreal2sim_env(self.args.env_id):
+            env_config.update(_openreal2sim_rl_gym_kwargs(use_wrist_camera=bool(self.args.use_wrist_camera)))
         self.env: BaseEnv = gym.make(**env_config)
         self.env.reset(seed=[self.args.seed * 1000 + i + extra_seed for i in range(self.args.num_envs)])
         self._reset_counter = 0
@@ -525,7 +573,7 @@ class SimlerContinuousWrapper:
     def reset(self, obj_set: str, same_init: bool = False):
         options = self._real2sim_reset_options()
         options["obj_set"] = obj_set
-        if self.args.env_id in REAL2SIM_RECORDER_ENV_IDS:
+        if self.args.env_id in REAL2SIM_RECORDER_ENV_IDS or _is_openreal2sim_env(self.args.env_id):
             base_episode_id = self.args.seed * 1_000_000 + self._reset_counter * self.num_envs
             options["episode_id"] = (
                 torch.arange(self.num_envs, device=self.env.device, dtype=torch.int64) + base_episode_id

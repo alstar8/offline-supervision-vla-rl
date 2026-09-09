@@ -181,6 +181,23 @@ def load_scene_config(scene_json_path: str | Path) -> SceneConfig:
     )
 
 
+SIM2REAL_REPO_ROOT = Path(__file__).resolve().parents[4]
+DEFAULT_SCENE_JSON_PATH = (
+    SIM2REAL_REPO_ROOT / "assets" / "scenes" / "airi_table_new_empty3_image" / "simulation" / "scene.json"
+)
+
+
+def resolve_app_runtime_path(path: str | Path) -> Path:
+    """Resolve a Docker `/app/...` path to the local sim2real repo when needed."""
+    raw = str(path)
+    if not raw.startswith("/app/"):
+        return Path(raw)
+    container_path = Path(raw)
+    if container_path.exists():
+        return container_path
+    return SIM2REAL_REPO_ROOT / raw[len("/app/") :]
+
+
 def resolve_path(path: str, base_dir: Optional[Path] = None) -> Path:
     """
     Resolve a path from scene.json, handling container paths.
@@ -195,11 +212,10 @@ def resolve_path(path: str, base_dir: Optional[Path] = None) -> Path:
     if base_dir is None:
         base_dir = Path.cwd()
 
-    # Keep container paths absolute. They are already canonical inside the runtime
-    # container and must not be re-based against cwd, otherwise /app/assets/... can
-    # incorrectly become /app/assets/assets/....
+    # Keep container paths absolute inside Docker. Outside Docker, rebase /app
+    # onto the sim2real checkout so object_bank and scene meshes resolve.
     if path.startswith("/app/"):
-        return Path(path)
+        return resolve_app_runtime_path(path)
 
     resolved = Path(path)
 
@@ -208,6 +224,24 @@ def resolve_path(path: str, base_dir: Optional[Path] = None) -> Path:
         resolved = base_dir / resolved
 
     return resolved
+
+
+def remap_object_placement_paths(placements: dict | None) -> dict | None:
+    """Rewrite Docker `/app/...` mesh paths in object_placements to local files."""
+    if not placements:
+        return placements
+    remapped: dict = {}
+    for obj_id, cfg in placements.items():
+        if not isinstance(cfg, dict):
+            remapped[obj_id] = cfg
+            continue
+        new_cfg = dict(cfg)
+        for key in ("mesh_path", "collision_mesh_path"):
+            value = new_cfg.get(key)
+            if value:
+                new_cfg[key] = str(resolve_app_runtime_path(value))
+        remapped[obj_id] = new_cfg
+    return remapped
 
 
 def load_trajectory(filepath: str) -> list[Pose] | None:

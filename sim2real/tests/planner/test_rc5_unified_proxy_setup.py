@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import textwrap
 
 import pytest
@@ -128,3 +129,66 @@ def test_load_runner_config_selects_object_startup_before_environment_creation(t
     assert config["manip_object_id"] == "spray_bottle_ext"
     assert config["resolved_robot_init_qpos_profile"] == "side"
     assert config["robot_init_qpos"] == pytest.approx(side)
+
+
+def test_load_runner_config_picks_rl_env_flags_from_simulation_yaml(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        textwrap.dedent(
+            """
+            keys: [demo]
+            global:
+              simulation: {}
+            local:
+              demo:
+                simulation:
+                  manip_object_id: orange_cube_ext
+                  task_description: Pick red cube
+                  use_wrist_camera: true
+                  use_360_background: true
+                  pano_sphere_radius: 20
+                  placement_mode: random
+            """
+        ).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    args = _Args(
+        config_path=str(config_path),
+        scene="assets/scenes/demo/simulation/scene.json",
+        key="demo",
+        no_auto_placement=False,
+    )
+
+    config = uut.load_runner_config(args)
+
+    assert config["task_description"] == "Pick red cube"
+    assert config["use_wrist_camera"] is True
+    assert config["use_360_background"] is True
+    assert config["pano_sphere_radius"] == 20
+    assert config["placement_mode"] == "random"
+
+
+def test_build_reset_options_from_runtime_request(tmp_path):
+    request_path = tmp_path / "runtime_request.json"
+    request_path.write_text(
+        '{"episode_index": 7, "placement_seed": 42}',
+        encoding="utf-8",
+    )
+    args = _Args(runtime_request_path=str(request_path))
+
+    assert uut.build_reset_options_from_args(args) == {"episode_id": 42}
+
+
+def test_build_reset_options_from_per_env_runtime_requests(tmp_path):
+    paths = []
+    for seed in (10, 11):
+        path = tmp_path / f"runtime_request_{seed}.json"
+        path.write_text(
+            f'{{"episode_index": {seed}, "placement_seed": {seed}}}',
+            encoding="utf-8",
+        )
+        paths.append(str(path))
+    args = _Args(runtime_request_path_per_env_json=json.dumps(paths))
+
+    assert uut.build_reset_options_from_args(args) == {"episode_id": [10, 11]}

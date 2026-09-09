@@ -8,13 +8,12 @@ an interactive robotic manipulation environment.
 
 from __future__ import annotations
 
-import os
-import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
 import numpy as np
 import sapien
+import sapien.render
 import torch
 from mani_skill.envs.sapien_env import BaseEnv
 from mani_skill.sensors.camera import CameraConfig
@@ -25,11 +24,61 @@ from mani_skill.utils.structs.pose import Pose
 from transforms3d.euler import euler2quat
 from transforms3d.quaternions import quat2mat
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.scene_loader import (DEFAULT_CAMERAS_CONFIG, SceneConfig,
-                                get_base_camera_eye_target, load_scene_config,
-                                resolve_path)
-from utils.transform_utils import opencv_to_sapien_pose, qvec2rotmat
+from ..utils.pano_sphere import (
+    DEFAULT_360_PHOTOS_DIR,
+    DEFAULT_PANO_SPHERE_RADIUS,
+    build_pano_sphere_actor,
+    list_360_photo_paths,
+    load_pano_texture,
+    resolve_equirect_texture,
+)
+from ..utils.rl_placement import (
+    DEFAULT_MIN_ROBOT_CLEARANCE,
+    DEFAULT_PAIR_GAP,
+    DEFAULT_REACHABLE_BOUNDS_MAX_XY,
+    DEFAULT_REACHABLE_BOUNDS_MIN_XY,
+    instruction_for_manip_object,
+    sample_nonoverlapping_xy,
+    xy_half_extent_from_bbox,
+)
+from ..utils.scene_loader import (
+    DEFAULT_CAMERAS_CONFIG,
+    DEFAULT_SCENE_JSON_PATH,
+    SceneConfig,
+    get_base_camera_eye_target,
+    load_scene_config,
+    resolve_app_runtime_path,
+    resolve_path,
+)
+from ..utils.transform_utils import opencv_to_sapien_pose, qvec2rotmat
+
+WRIST_CAMERA_NAME = "wrist_camera"
+WRIST_CAMERA_WIDTH = 168
+WRIST_CAMERA_HEIGHT = 224
+WRIST_CAMERA_FOV = 1.5000000000000002
+WRIST_CAMERA_NEAR = 0.01
+WRIST_CAMERA_FAR = 2.0
+WRIST_CAMERA_FAR_PANO = 100.0
+WRIST_CAMERA_MOUNT_LINKS = ("prehand", "prehand_cam")
+WRIST_CAMERA_LOCAL_P = [0.0, 0.06750000000000002, 0.060600000000000015]
+WRIST_CAMERA_LOCAL_Q = [
+    0.7071067811865476,
+    -0.0,
+    0.7071067811865475,
+    0.0,
+]
+THIRD_VIEW_CAMERA_NAME = "3rd_view_camera"
+THIRD_VIEW_WIDTH = 640
+THIRD_VIEW_HEIGHT = 480
+
+
+def _wrist_mount_link(agent):
+    links = getattr(getattr(agent, "robot", None), "links_map", None) or {}
+    for name in WRIST_CAMERA_MOUNT_LINKS:
+        mount = links.get(name)
+        if mount is not None:
+            return name, mount
+    return None, None
 
 
 def _apply_runtime_joint_controller_tuning(
@@ -160,8 +209,14 @@ class OpenReal2SimEnv(BaseEnv):
     ]
     ROBOT_INIT_QPOS_NOISE = 0.02
     ROBOT_INIT_QPOS_NOISE_2 = 0.04
-    SUPPORTED_ROBOTS = ["panda", "widowx250s_openr2s", "widowx250s_bridgedataset_flat_table_openr2s",
-                        "widowx250s_openr2s_rl"]
+    SUPPORTED_ROBOTS = [
+        "panda",
+        "widowx250s_openr2s",
+        "widowx250s_bridgedataset_flat_table_openr2s",
+        "widowx250s_openr2s_rl",
+        "rc5_aero_hand_openr2s",
+        "rc5_aero_hand_openr2s_rl",
+    ]
 
     def __init__(
         self,
@@ -205,6 +260,10 @@ class OpenReal2SimEnv(BaseEnv):
         lift_height: float = None,
         finger_length: float = None,
         robot_base_pose_z_auto: bool = True,
+        use_wrist_camera: bool = False,
+        use_360_background: bool = False,
+        pano_photos_dir: str = None,
+        pano_sphere_radius: float = DEFAULT_PANO_SPHERE_RADIUS,
         **kwargs,
     ):
         """
@@ -279,11 +338,30 @@ class OpenReal2SimEnv(BaseEnv):
             robot_base_pose.z with auto_table_z (raycast-computed table surface height)
             after _load_scene(). Mirrors the post-env-creation step in the visualization
             script. Set to False to use the explicit Z from robot_base_pose as-is.
+        use_wrist_camera: mount a RealSense-style wrist camera on ``prehand``.
+        use_360_background: map Insta360 photos onto inverted spheres around the
+            workspace. Planner path stays off; RL gym enables this by default.
+        pano_photos_dir: directory of dual-fisheye / equirect 360 captures.
+        pano_sphere_radius: inverted sphere radius in meters. Must exceed the
+            camera far-plane distance only if cameras sit inside the sphere.
         """
         if scene_json_path is None:
-            raise ValueError("scene_json_path must be provided")
+            scene_json_path = DEFAULT_SCENE_JSON_PATH
 
         self.scene_json_path = Path(scene_json_path)
+        self.use_wrist_camera = bool(use_wrist_camera)
+        self.use_360_background = bool(use_360_background)
+        self.pano_photos_dir = Path(pano_photos_dir) if pano_photos_dir else DEFAULT_360_PHOTOS_DIR
+        self.pano_sphere_radius = float(pano_sphere_radius)
+        self._pano_sphere_actor = None
+        self._pano_sphere_material = None
+        self._pano_textures = []
+        self._pano_photo_paths = []
+        self._pano_photo_idx = None
+        self._pano_yaw = None
+        self._pano_center = None
+        self._pano_reset_counter = 0
+        self._placement_reset_counter = 0
         self.scene_config: SceneConfig = load_scene_config(self.scene_json_path)
         self.robot_init_qpos_noise = robot_init_qpos_noise
         self.scene_z_offset = scene_z_offset
@@ -380,19 +458,25 @@ class OpenReal2SimEnv(BaseEnv):
             if len(arr) >= 8:
                 self.robot_init_qpos_custom = arr.tolist()
 
-        if "sim_config" not in kwargs and (physx_contact_offset is not None or physx_rest_offset is not None):
-            sc = {}
+        if physx_contact_offset is not None or physx_rest_offset is not None:
+            sim_config = dict(kwargs.get("sim_config") or {})
+            scene_cfg = dict(sim_config.get("scene_config") or {})
             if physx_contact_offset is not None:
-                sc["contact_offset"] = physx_contact_offset
+                scene_cfg["contact_offset"] = physx_contact_offset
             if physx_rest_offset is not None:
-                sc["rest_offset"] = physx_rest_offset
-            kwargs["sim_config"] = {"scene_config": sc}
-            print(f"[PhysX] scene: contact_offset={physx_contact_offset}, "
-                  f"rest_offset={physx_rest_offset} "
-                  f"(ManiSkill default 0.02/0.0)")
+                scene_cfg["rest_offset"] = physx_rest_offset
+            sim_config["scene_config"] = scene_cfg
+            kwargs["sim_config"] = sim_config
+            print(
+                f"[PhysX] scene: contact_offset={physx_contact_offset}, "
+                f"rest_offset={physx_rest_offset} "
+                f"(ManiSkill default 0.02/0.0)"
+            )
         elif "sim_config" not in kwargs:
-            print("[PhysX] scene: using ManiSkill defaults "
-                  "(contact_offset=0.02, rest_offset=0.0)")
+            print(
+                "[PhysX] scene: using ManiSkill defaults "
+                "(contact_offset=0.02, rest_offset=0.0)"
+            )
 
         super().__init__(*args, robot_uids=robot_uids, **kwargs)
 
@@ -704,10 +788,15 @@ class OpenReal2SimEnv(BaseEnv):
             floor_width=100,
             altitude=sim_ground_z,
         )
+        if self.use_360_background:
+            self._hide_ground_visual()
 
         self._load_background()
 
         self._load_objects()
+
+        if self.use_360_background:
+            self._load_360_spheres()
 
         # RL4VLA-style robot render: specular=0.9, roughness=0.3 (matches Bridge dataset)
         self._apply_robot_render_material()
@@ -824,6 +913,149 @@ class OpenReal2SimEnv(BaseEnv):
         )
         self.background_actor = builder.build_static(name="background")
 
+    def _hide_ground_visual(self):
+        """Keep the physics floor, hide the checkerboard so the 360 sphere shows."""
+        ground = getattr(self, "ground", None)
+        objs = getattr(ground, "_objs", None) or []
+        for obj in objs:
+            body = obj.find_component_by_type(sapien.render.RenderBodyComponent)
+            if body is None:
+                continue
+            body.visibility = 0
+            if hasattr(body, "disable"):
+                body.disable()
+
+    def _pano_sphere_center_xyz(self) -> np.ndarray:
+        xy_min, xy_max = self._compute_table_bounds()
+        z = float(self._get_object_support_z())
+        return np.array(
+            [
+                0.5 * (float(xy_min[0]) + float(xy_max[0])),
+                0.5 * (float(xy_min[1]) + float(xy_max[1])),
+                z,
+            ],
+            dtype=np.float32,
+        )
+
+    def _load_360_spheres(self):
+        """Build one inverted sphere and preload every 360 photo texture."""
+        photos = list_360_photo_paths(self.pano_photos_dir)
+        if not photos:
+            print(
+                f"{_Y}[360] no photos in {self.pano_photos_dir}; "
+                f"wrist background will stay black{_R}"
+            )
+            self._pano_sphere_actor = None
+            self._pano_textures = []
+            return
+
+        self._pano_center = self._pano_sphere_center_xyz()
+        n_env = int(self.num_envs)
+        self._pano_photo_idx = np.zeros(n_env, dtype=np.int32)
+        self._pano_yaw = np.zeros(n_env, dtype=np.float32)
+        textures = []
+        paths = []
+        print(
+            f"[360] loading {len(photos)} photo(s) from {self.pano_photos_dir} "
+            f"(radius={self.pano_sphere_radius:.1f}m, center={self._pano_center.tolist()})"
+        )
+        for photo in photos:
+            texture_path = resolve_equirect_texture(photo)
+            textures.append(load_pano_texture(texture_path))
+            paths.append(photo)
+        actor, material = build_pano_sphere_actor(
+            self.scene,
+            resolve_equirect_texture(photos[0]),
+            name="pano_sphere",
+            radius=self.pano_sphere_radius,
+            initial_pose=sapien.Pose(p=self._pano_center.tolist(), q=[1.0, 0.0, 0.0, 0.0]),
+        )
+        self._pano_sphere_actor = actor
+        self._pano_sphere_material = material
+        self._pano_textures = textures
+        self._pano_photo_paths = paths
+        print(f"[360] inverted sphere ready ({len(textures)} equirect textures)")
+
+    def _apply_pano_texture(self, texture):
+        material = self._pano_sphere_material
+        if material is None:
+            return
+        material.set_base_color_texture(texture)
+        material.set_emission_texture(None)
+
+    def _randomize_360_spheres(self, env_idx: torch.Tensor, options: dict):
+        """Pick a random photo and yaw for each resetting env."""
+        actor = self._pano_sphere_actor
+        textures = self._pano_textures
+        if actor is None or not textures:
+            return
+        env_indices = [int(i) for i in env_idx.detach().cpu().tolist()]
+        n_env = int(self.num_envs)
+        n_photos = len(textures)
+        if self._pano_photo_idx is None or len(self._pano_photo_idx) != n_env:
+            self._pano_photo_idx = np.zeros(n_env, dtype=np.int32)
+            self._pano_yaw = np.zeros(n_env, dtype=np.float32)
+        seed_offset = int((self.random_placement or {}).get("seed") or 0)
+        self._pano_reset_counter = int(getattr(self, "_pano_reset_counter", 0)) + 1
+        options = options or {}
+        raw = options.get("episode_id")
+        for env_i in env_indices:
+            if raw is not None:
+                arr = raw.detach().cpu().numpy() if torch.is_tensor(raw) else np.asarray(raw)
+                arr = np.atleast_1d(arr).astype(np.int64).reshape(-1)
+                if arr.size == 1:
+                    episode_id = int(arr[0]) + int(env_i)
+                else:
+                    episode_id = int(arr[int(env_i) % arr.size])
+            else:
+                episode_id = int(self._pano_reset_counter) * 36007 + int(env_i)
+            rng = np.random.RandomState((seed_offset + episode_id + 17) % (2**31 - 1))
+            self._pano_photo_idx[env_i] = int(rng.randint(0, n_photos))
+            self._pano_yaw[env_i] = float(rng.uniform(0.0, 2.0 * np.pi))
+
+        center = (
+            np.asarray(self._pano_center, dtype=np.float32)
+            if self._pano_center is not None
+            else self._pano_sphere_center_xyz()
+        )
+        positions = np.repeat(center.reshape(1, 3), n_env, axis=0)
+        quats = np.zeros((n_env, 4), dtype=np.float32)
+        for env_i in range(n_env):
+            quats[env_i] = np.asarray(
+                euler2quat(0.0, 0.0, float(self._pano_yaw[env_i])),
+                dtype=np.float32,
+            )
+        actor.set_pose(Pose.create_from_pq(p=positions, q=quats))
+        if getattr(self.scene, "gpu_sim_enabled", False):
+            try:
+                self.scene.px.gpu_apply_rigid_dynamic_data()
+            except Exception:
+                pass
+        # One shared material: use the first resetting env's photo.
+        photo_i = int(self._pano_photo_idx[env_indices[0]])
+        self._apply_pano_texture(textures[photo_i])
+        path = self._pano_photo_paths[photo_i] if self._pano_photo_paths else None
+        print(
+            f"[360] env {env_indices[0]}: photo={path.name if path is not None else photo_i} "
+            f"yaw={float(self._pano_yaw[env_indices[0]]):.3f} rad"
+        )
+
+    def _after_reconfigure(self, options):
+        super()._after_reconfigure(options)
+        if not getattr(self, "use_360_background", False):
+            return
+        for name, sensor in getattr(self, "_sensors", {}).items():
+            camera = getattr(sensor, "camera", None)
+            if camera is None or not hasattr(camera, "far"):
+                continue
+            try:
+                old_far = float(camera.far)
+            except Exception:
+                continue
+            if old_far < WRIST_CAMERA_FAR_PANO:
+                camera.far = float(WRIST_CAMERA_FAR_PANO)
+                print(f"[360] {name} far {old_far:g} -> {WRIST_CAMERA_FAR_PANO:g}")
+
     def _get_object_support_z(self) -> float:
         """Return the Z of the surface objects should rest on."""
         if self.auto_table_z is not None:
@@ -939,13 +1171,13 @@ class OpenReal2SimEnv(BaseEnv):
         collision_mesh_override = placement_cfg.get("collision_mesh_path")
 
         if mesh_path_override:
-            visual_path = Path(mesh_path_override)
+            visual_path = resolve_path(str(mesh_path_override))
         else:
             visual_path = resolve_path(obj_config.mesh_path)
 
         collision_cfg_path = collision_mesh_override or getattr(obj_config, "collision_mesh_path", None)
         if collision_cfg_path:
-            collision_path = Path(collision_cfg_path)
+            collision_path = resolve_path(str(collision_cfg_path))
         else:
             collision_path = visual_path
 
@@ -970,6 +1202,16 @@ class OpenReal2SimEnv(BaseEnv):
             self._table_bounds_xy = (bmin, bmax)
             return self._table_bounds_xy
 
+        if self.placement_mode == "random":
+            bmin = np.asarray(DEFAULT_REACHABLE_BOUNDS_MIN_XY, dtype=float)
+            bmax = np.asarray(DEFAULT_REACHABLE_BOUNDS_MAX_XY, dtype=float)
+            print(
+                "[Placement] Table bounds from reachable RC5 workspace: "
+                f"X=[{bmin[0]:.3f}, {bmax[0]:.3f}], Y=[{bmin[1]:.3f}, {bmax[1]:.3f}]"
+            )
+            self._table_bounds_xy = (bmin, bmax)
+            return self._table_bounds_xy
+
         centers_xy = []
         for obj_config in self.scene_config.objects.values():
             ec = obj_config.center
@@ -991,44 +1233,114 @@ class OpenReal2SimEnv(BaseEnv):
         self._table_bounds_xy = (bmin, bmax)
         return self._table_bounds_xy
 
-    def _random_place_object(self, obj_id, placed_centers, rng):
-        """Pick a random XY on the table with random yaw, avoiding collisions.
+    def _robot_base_xy_np(self) -> np.ndarray:
+        pose = self.robot_base_pose if self.robot_base_pose is not None else self.ROBOT_BASE_POSE
+        p = np.asarray(pose.p, dtype=np.float64).reshape(-1)
+        return p[:2]
 
+    def _object_xy_radius(self, obj_id) -> float:
+        return xy_half_extent_from_bbox(self.object_bbox_bounds.get(obj_id))
+
+    def _is_movable_object(self, obj_id) -> bool:
+        return self._object_body_types.get(obj_id, "dynamic") == "dynamic"
+
+    def _ensure_per_env_pose_buffers(self, obj_id):
+        n = int(self.num_envs)
+        if obj_id not in self._initial_object_poses_per_env:
+            p = np.asarray(self._initial_object_poses[obj_id], dtype=np.float32)
+            q = np.asarray(
+                self._initial_object_quats.get(obj_id, self.OBJECT_INIT_QUAT),
+                dtype=np.float32,
+            )
+            self._initial_object_poses_per_env[obj_id] = np.tile(p.reshape(1, 3), (n, 1))
+            self._initial_object_quats_per_env[obj_id] = np.tile(q.reshape(1, 4), (n, 1))
+
+    def _episode_ids_for_reset(self, options, env_indices) -> dict[int, int]:
+        options = options or {}
+        ids: dict[int, int] = {}
+        raw = options.get("episode_id")
+        if raw is not None:
+            arr = raw.detach().cpu().numpy() if torch.is_tensor(raw) else np.asarray(raw)
+            arr = np.atleast_1d(arr).astype(np.int64).reshape(-1)
+            for env_i in env_indices:
+                if arr.size == 1:
+                    ids[int(env_i)] = int(arr[0]) + int(env_i)
+                elif int(env_i) < arr.size:
+                    ids[int(env_i)] = int(arr[int(env_i)])
+                else:
+                    ids[int(env_i)] = int(arr[int(env_i) % arr.size])
+            return ids
+        self._placement_reset_counter += 1
+        for env_i in env_indices:
+            ids[int(env_i)] = int(self._placement_reset_counter) * 10007 + int(env_i)
+        return ids
+
+    def _random_place_object(self, obj_id, occupied, rng):
+        """Pick a reachable XY that does not overlap occupied footprints.
+
+        `occupied` is a list of `(xy, radius)` pairs and is updated in place.
         Returns ([x, y], quat_sapien) or None if placement failed.
         """
-        cfg = self.random_placement
+        cfg = self.random_placement or {}
         xy_min, xy_max = self._compute_table_bounds()
-        margin = cfg.get("table_margin", 0.05)
-        min_dist = cfg.get("min_object_distance", 0.08)
-        yaw_lo, yaw_hi = cfg.get("yaw_range", [0, 2 * np.pi])
+        margin = float(cfg.get("table_margin", 0.0))
+        lo = np.asarray(xy_min, dtype=np.float64)[:2] + margin
+        hi = np.asarray(xy_max, dtype=np.float64)[:2] - margin
+        if lo[0] >= hi[0] or lo[1] >= hi[1]:
+            lo = np.asarray(xy_min, dtype=np.float64)[:2]
+            hi = np.asarray(xy_max, dtype=np.float64)[:2]
 
-        lo_x = xy_min[0] + margin
-        hi_x = xy_max[0] - margin
-        lo_y = xy_min[1] + margin
-        hi_y = xy_max[1] - margin
+        radius = self._object_xy_radius(obj_id)
+        xy = sample_nonoverlapping_xy(
+            rng,
+            radius=radius,
+            bounds_min=lo,
+            bounds_max=hi,
+            occupied=occupied,
+            robot_base_xy=self._robot_base_xy_np(),
+            min_robot_clearance=float(cfg.get("min_robot_clearance", DEFAULT_MIN_ROBOT_CLEARANCE)),
+            pair_gap=float(cfg.get("pair_gap", cfg.get("min_object_distance", DEFAULT_PAIR_GAP))),
+            max_attempts=int(cfg.get("max_attempts", 80)),
+        )
+        if xy is None:
+            print(
+                f"[WARN] Random placement failed for object {obj_id} after "
+                f"{cfg.get('max_attempts', 80)} attempts, keeping previous pose"
+            )
+            return None
+        quat_sapien = list(self._initial_object_quats.get(obj_id, self.OBJECT_INIT_QUAT))
+        occupied.append((xy, radius))
+        return [float(xy[0]), float(xy[1])], quat_sapien
 
-        if lo_x >= hi_x or lo_y >= hi_y:
-            print(f"[WARN] Table bounds too small after margin: "
-                  f"X=[{lo_x:.3f},{hi_x:.3f}], Y=[{lo_y:.3f},{hi_y:.3f}]. "
-                  f"Reducing margin to 0.")
-            lo_x, hi_x = xy_min[0], xy_max[0]
-            lo_y, hi_y = xy_min[1], xy_max[1]
+    def _randomize_episode_object_poses(self, env_idx: torch.Tensor, options: dict):
+        env_indices = [int(i) for i in env_idx.detach().cpu().tolist()]
+        episode_ids = self._episode_ids_for_reset(options, env_indices)
+        movable = [oid for oid in self.object_actors if self._is_movable_object(oid)]
+        fixtures = [oid for oid in self.object_actors if not self._is_movable_object(oid)]
+        seed_offset = int(self.random_placement.get("seed") or 0)
 
-        for _ in range(int(cfg.get("max_attempts", 100))):
-            x = rng.uniform(lo_x, hi_x)
-            y = rng.uniform(lo_y, hi_y)
-            if all(np.hypot(x - cx, y - cy) >= min_dist for cx, cy in placed_centers):
-                # yaw disabled: meshes already have baked-in orientation from reconstruction
-                # yaw = rng.uniform(yaw_lo, yaw_hi)
-                # q_wxyz = euler2quat(0, 0, yaw)  # transforms3d returns wxyz
-                # quat_sapien = list(q_wxyz)       # SAPIEN also uses wxyz
-                quat_sapien = [1, 0, 0, 0]  # identity (SAPIEN wxyz)
-                placed_centers.append((x, y))
-                return [x, y], quat_sapien
-
-        print(f"[WARN] Random placement failed for object {obj_id} after "
-              f"{cfg.get('max_attempts', 100)} attempts, using scene.json position")
-        return None
+        for env_i in env_indices:
+            rng = np.random.RandomState((seed_offset + int(episode_ids[env_i]) + 7919) % (2**31 - 1))
+            occupied: list[tuple[np.ndarray, float]] = []
+            for oid in fixtures:
+                p = np.asarray(self._initial_object_poses[oid], dtype=np.float64)
+                occupied.append((p[:2], self._object_xy_radius(oid)))
+            for oid in movable:
+                bbox = self.object_bbox_bounds.get(oid)
+                result = self._random_place_object(oid, occupied, rng)
+                if result is None or bbox is None:
+                    continue
+                xy, quat = result
+                pl = self.object_placements.get(str(oid), {}) or {}
+                spawn_clearance = self._get_spawn_clearance(pl)
+                p, q = self._compute_spawn_pose(oid, xy, quat, bbox, spawn_clearance=spawn_clearance)
+                p[2] += float(pl.get("z_extra", 0.0))
+                self._ensure_per_env_pose_buffers(oid)
+                self._initial_object_poses_per_env[oid][env_i] = np.asarray(p, dtype=np.float32)
+                self._initial_object_quats_per_env[oid][env_i] = np.asarray(q, dtype=np.float32)
+                if env_i == env_indices[0]:
+                    self._initial_object_poses[oid] = p
+                    self._initial_object_quats[oid] = q
 
     def _load_objects(self):
         """Load reconstructed object meshes as dynamic actors.
@@ -1153,10 +1465,10 @@ class OpenReal2SimEnv(BaseEnv):
             bbox = self.object_bbox_bounds.get(obj_id)
             init_quat = list(self.OBJECT_INIT_QUAT)
 
-            # Read scale from fixed placement config
-            obj_scale = 1.0
-            if self.placement_mode == "fixed" and str(obj_id) in self.object_placements:
-                obj_scale = float(self.object_placements[str(obj_id)].get("scale", 1.0))
+            # Read scale / spawn pose from placement config whenever it is present.
+            # Random mode still uses these as the initial pose, then jitters XY on reset.
+            pl = self.object_placements.get(str(obj_id), {}) or {}
+            obj_scale = float(pl.get("scale", 1.0))
 
             # centering_pose must account for scale: mesh verts are scaled first,
             # then pose is applied, so offset = -(mesh_center * scale)
@@ -1177,15 +1489,11 @@ class OpenReal2SimEnv(BaseEnv):
 
             # Z: place mesh bottom on the support surface (table if known)
             bbox_min_z = float(bbox[0][2]) if bbox is not None else 0.0
-            # In fixed mode some objects may intentionally have no per-object override.
-            # Use an empty dict so downstream pl.get(...) falls back to env defaults.
-            pl = self.object_placements.get(str(obj_id), {}) if self.placement_mode == "fixed" else {}
             spawn_clearance = self._get_spawn_clearance(pl)
             support_surface_z = self._get_object_support_z()
             origin_z = support_surface_z + spawn_clearance - bbox_min_z
 
-            if self.placement_mode == "fixed" and str(obj_id) in self.object_placements:
-                pl = self.object_placements[str(obj_id)]
+            if pl.get("position") is not None:
                 (
                     init_pose_p,
                     init_quat,
@@ -1384,12 +1692,12 @@ class OpenReal2SimEnv(BaseEnv):
                     f"External object '{ext_id}' in object_placements must define 'position'"
                 )
 
-            ext_path = Path(pl["mesh_path"])
+            ext_path = resolve_app_runtime_path(pl["mesh_path"])
             if not ext_path.exists():
                 raise FileNotFoundError(
                     f"External object '{ext_id}': mesh not found at {ext_path}"
                 )
-            ext_collision_path = Path(pl.get("collision_mesh_path", pl["mesh_path"]))
+            ext_collision_path = resolve_app_runtime_path(pl.get("collision_mesh_path", pl["mesh_path"]))
             if not ext_collision_path.exists():
                 raise FileNotFoundError(
                     f"External object '{ext_id}': collision mesh not found at {ext_collision_path}"
@@ -1612,18 +1920,10 @@ class OpenReal2SimEnv(BaseEnv):
 
             # --- Random placement: recompute positions each episode ---
             if self.placement_mode == "random":
-                seed = self.random_placement.get("seed", None)
-                rng = np.random.RandomState(seed)
-                placed_centers: list = []
-                for obj_id in self.object_actors:
-                    bbox = self.object_bbox_bounds.get(obj_id)
-                    result = self._random_place_object(obj_id, placed_centers, rng)
-                    if result is not None and bbox is not None:
-                        xy, quat = result
-                        p, q = self._compute_spawn_pose(obj_id, xy, quat, bbox)
-                        self._initial_object_poses[obj_id] = p
-                        self._initial_object_quats[obj_id] = q
-                    # else: keep whatever was stored from _load_objects
+                self._randomize_episode_object_poses(env_idx, options)
+
+            if self.use_360_background:
+                self._randomize_360_spheres(env_idx, options)
 
             for obj_id, actor in self.object_actors.items():
                 if obj_id in self._initial_object_poses:
@@ -1907,12 +2207,12 @@ class OpenReal2SimEnv(BaseEnv):
         strings with one instruction per environment.
         Priority: task_description (preset/config override) → scene.json task_desc → generic fallback.
         """
-        if self.task_description:
-            instruction = self.task_description
-        elif self.scene_config.task_desc:
-            instruction = self.scene_config.task_desc
-        else:
-            instruction = "pick up the object"
+        instruction = instruction_for_manip_object(
+            task_description=self.task_description,
+            manip_object_id=self.manip_object_id,
+            object_placements=self.object_placements,
+            scene_task_desc=self.scene_config.task_desc,
+        )
         return [instruction] * self.num_envs
 
     def evaluate(self) -> dict:
@@ -2070,6 +2370,10 @@ class OpenReal2SimEnv(BaseEnv):
         print(f"[BASE_CAMERA]   forward (R[:,0]): [{forward[0]:.6f}, {forward[1]:.6f}, {forward[2]:.6f}]")
         return sapien.Pose(p=p_numpy, q=q_numpy)
 
+    def _uses_visual_obs(self) -> bool:
+        mode = str(getattr(self, "obs_mode", "") or getattr(self, "_obs_mode", "") or "")
+        return any(token in mode for token in ("rgb", "rgbd", "depth", "segmentation", "sensor_data"))
+
     @property
     def _default_sensor_configs(self) -> List[CameraConfig]:
         """
@@ -2111,13 +2415,60 @@ class OpenReal2SimEnv(BaseEnv):
                       f"{orig_w}x{orig_h} → {int(width)}x{int(height)} "
                       f"(scale_x={scale_x:.3f}, scale_y={scale_y:.3f})")
 
-        configs.append(CameraConfig(
-            uid="base_camera",
-            pose=pose,
-            width=int(width),
-            height=int(height),
-            intrinsic=intrinsic,
-        ))
+        uses_visual_obs = self._uses_visual_obs()
+        if uses_visual_obs:
+            # PPO / OpenVLA consume 3rd_view_camera. Skip a same-pose base_camera so
+            # parallel GPU envs are not paying for a duplicate RGB+segmentation buffer.
+            third_w, third_h = THIRD_VIEW_WIDTH, THIRD_VIEW_HEIGHT
+            third_intrinsic = np.array(cam_config.intrinsic_matrix, dtype=float)
+            orig_w, orig_h = cam_config.width, cam_config.height
+            if int(third_w) != orig_w or int(third_h) != orig_h:
+                third_intrinsic = third_intrinsic.copy()
+                third_intrinsic[0] *= int(third_w) / orig_w
+                third_intrinsic[1] *= int(third_h) / orig_h
+            configs.append(CameraConfig(
+                uid=THIRD_VIEW_CAMERA_NAME,
+                pose=pose,
+                width=int(third_w),
+                height=int(third_h),
+                intrinsic=third_intrinsic,
+            ))
+            print(
+                f"[Camera] {THIRD_VIEW_CAMERA_NAME}: {third_w}x{third_h} "
+                "(OpenVLA / PPO third-person view; base_camera omitted)"
+            )
+        else:
+            configs.append(CameraConfig(
+                uid="base_camera",
+                pose=pose,
+                width=int(width),
+                height=int(height),
+                intrinsic=intrinsic,
+            ))
+
+        if getattr(self, "use_wrist_camera", False):
+            mount_name, mount = _wrist_mount_link(self.agent)
+            if mount is None:
+                print(
+                    "[Camera] wrist_camera requested but neither "
+                    f"{WRIST_CAMERA_MOUNT_LINKS} was found on the robot"
+                )
+            else:
+                print(f"[Camera] wrist_camera mounted on RealSense link '{mount_name}'")
+                configs.append(CameraConfig(
+                    uid=WRIST_CAMERA_NAME,
+                    pose=sapien.Pose(p=WRIST_CAMERA_LOCAL_P, q=WRIST_CAMERA_LOCAL_Q),
+                    width=WRIST_CAMERA_WIDTH,
+                    height=WRIST_CAMERA_HEIGHT,
+                    fov=WRIST_CAMERA_FOV,
+                    near=WRIST_CAMERA_NEAR,
+                    far=(
+                        WRIST_CAMERA_FAR_PANO
+                        if getattr(self, "use_360_background", False)
+                        else WRIST_CAMERA_FAR
+                    ),
+                    mount=mount,
+                ))
 
         for cust in self.cameras_config.get("custom_cameras", []):
             if cust.get("type", "sensor") != "sensor":

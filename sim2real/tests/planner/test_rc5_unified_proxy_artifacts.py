@@ -42,6 +42,12 @@ def test_batched_dense_capture_persists_per_env_instructions_for_dense_and_rl4vl
         frame1 = np.ones((4, 4, 3), dtype=np.uint8)
         capture.images_per_env[0].extend([frame0.copy(), frame1.copy()])
         capture.images_per_env[1].extend([frame1.copy(), frame0.copy()])
+        capture.wrist_images_per_env[0].extend(
+            [np.full((4, 4, 3), 3, dtype=np.uint8), np.full((4, 4, 3), 4, dtype=np.uint8)]
+        )
+        capture.wrist_images_per_env[1].extend(
+            [np.full((4, 4, 3), 5, dtype=np.uint8), np.full((4, 4, 3), 6, dtype=np.uint8)]
+        )
         capture.actions_per_env[0].append(np.zeros((7,), dtype=np.float32))
         capture.actions_per_env[1].append(np.ones((7,), dtype=np.float32))
         capture.infos_per_env[0].append({"success": True})
@@ -90,6 +96,9 @@ def test_batched_dense_capture_persists_per_env_instructions_for_dense_and_rl4vl
         assert raw_1["embedded_runtime_request_json"] == '{"episode_id":"episode_000001"}'
         assert decode_rl4vla_raw_episode_images(raw_0).shape == (1, 480, 640, 3)
         assert decode_rl4vla_raw_episode_images(raw_1).shape == (1, 480, 640, 3)
+        assert decode_rl4vla_raw_episode_images(raw_0, key="image_wrist").shape == (1, 480, 640, 3)
+        assert decode_rl4vla_raw_episode_images(raw_1, key="image_wrist").shape == (1, 480, 640, 3)
+        assert raw_0["camera_names"] == ["base_camera", "wrist_camera"]
     finally:
         uut.clear_unified_dense_episode_capture()
 

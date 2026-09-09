@@ -121,27 +121,62 @@ def decode_dense_episode_images(payload: Mapping[str, Any]) -> np.ndarray:
     return np.asarray(decoded_images, dtype=np.uint8)
 
 
-def decode_rl4vla_raw_episode_images(payload: Mapping[str, Any]) -> np.ndarray:
-    encoded_images = payload.get("image")
+def decode_rl4vla_raw_episode_images(payload: Mapping[str, Any], *, key: str = "image") -> np.ndarray:
+    encoded_images = payload.get(key)
     if not isinstance(encoded_images, list):
-        raise ValueError("rl4vla raw image payload must be a python list")
+        raise ValueError(f"rl4vla raw {key} payload must be a python list")
     decoded_images = []
     for idx, item in enumerate(encoded_images):
         if isinstance(item, np.ndarray):
             if item.dtype != np.uint8 or item.ndim != 1:
                 raise ValueError(
-                    f"rl4vla raw image payload item {idx} must be a 1D uint8 numpy array"
+                    f"rl4vla raw {key} payload item {idx} must be a 1D uint8 numpy array"
                 )
             image_bytes = item.tobytes()
         elif isinstance(item, (bytes, bytearray)):
             image_bytes = bytes(item)
         else:
             raise ValueError(
-                f"rl4vla raw image payload item {idx} must be JPEG bytes or a 1D uint8 numpy array"
+                f"rl4vla raw {key} payload item {idx} must be JPEG bytes or a 1D uint8 numpy array"
             )
         with Image.open(BytesIO(image_bytes)) as pil_image:
             decoded_images.append(np.asarray(pil_image.convert("RGB"), dtype=np.uint8))
     return np.asarray(decoded_images, dtype=np.uint8)
+
+
+def _encode_rl4vla_step_aligned_images(
+    images: Sequence[Any],
+    *,
+    image_target_width: int,
+    image_target_height: int,
+    preencoded_images: Sequence[Any] | None = None,
+    label: str = "preencoded_images",
+) -> list[np.ndarray]:
+    if preencoded_images is None:
+        return [
+            _encode_frame_to_jpeg_uint8_buffer(
+                _resize_frame_to_canvas(
+                    frame,
+                    target_width=image_target_width,
+                    target_height=image_target_height,
+                )
+            )
+            for frame in images[:-1]
+        ]
+    if len(preencoded_images) != len(images):
+        raise ValueError(f"{label} must contain exactly as many items as images")
+    step_aligned_images = []
+    for idx, item in enumerate(preencoded_images[:-1]):
+        if isinstance(item, np.ndarray):
+            encoded = np.asarray(item, dtype=np.uint8)
+            if encoded.ndim != 1:
+                raise ValueError(f"{label}[{idx}] must be a 1D uint8 numpy array")
+            step_aligned_images.append(encoded.copy())
+        elif isinstance(item, (bytes, bytearray)):
+            step_aligned_images.append(np.frombuffer(bytes(item), dtype=np.uint8).copy())
+        else:
+            raise ValueError(f"{label}[{idx}] must be JPEG bytes or a 1D uint8 numpy array")
+    return step_aligned_images
 
 
 def build_dense_episode_payload(
@@ -155,6 +190,7 @@ def build_dense_episode_payload(
     camera_name: str = "base_camera",
     image_target_width: int = DEFAULT_RL4VLA_IMAGE_WIDTH,
     image_target_height: int = DEFAULT_RL4VLA_IMAGE_HEIGHT,
+    wrist_images: Sequence[Any] | None = None,
 ) -> dict[str, Any]:
     resolved_instruction = _require_non_empty_str(instruction, label="instruction")
     resolved_camera_name = _require_non_empty_str(camera_name, label="camera_name")
@@ -192,7 +228,7 @@ def build_dense_episode_payload(
 
     info_array = np.asarray(list(infos), dtype=object)
 
-    return {
+    payload = {
         "schema_version": DENSE_EPISODE_ARTIFACT_SCHEMA_VERSION,
         "instruction": resolved_instruction,
         "camera_name": resolved_camera_name,
@@ -207,6 +243,24 @@ def build_dense_episode_payload(
         "result": resolved_result,
         "source": resolved_source,
     }
+    if wrist_images is not None:
+        if len(wrist_images) != len(images):
+            raise ValueError("wrist_images must contain exactly as many items as images")
+        payload["image_wrist"] = np.asarray(
+            [
+                _encode_frame_to_jpeg_bytes(
+                    _resize_frame_to_canvas(
+                        frame,
+                        target_width=resolved_image_target_width,
+                        target_height=resolved_image_target_height,
+                    )
+                )
+                for frame in wrist_images
+            ],
+            dtype=object,
+        )
+        payload["camera_names"] = ["base_camera", "wrist_camera"]
+    return payload
 
 
 def write_dense_episode_artifact(
@@ -221,6 +275,7 @@ def write_dense_episode_artifact(
     camera_name: str = "base_camera",
     image_target_width: int = DEFAULT_RL4VLA_IMAGE_WIDTH,
     image_target_height: int = DEFAULT_RL4VLA_IMAGE_HEIGHT,
+    wrist_images: Sequence[Any] | None = None,
 ) -> Path:
     payload = build_dense_episode_payload(
         instruction=instruction,
@@ -232,6 +287,7 @@ def write_dense_episode_artifact(
         camera_name=camera_name,
         image_target_width=image_target_width,
         image_target_height=image_target_height,
+        wrist_images=wrist_images,
     )
     output_path = Path(artifact_path).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -249,6 +305,8 @@ def build_rl4vla_raw_episode_payload(
     image_target_width: int = DEFAULT_RL4VLA_IMAGE_WIDTH,
     image_target_height: int = DEFAULT_RL4VLA_IMAGE_HEIGHT,
     preencoded_images: Sequence[Any] | None = None,
+    wrist_images: Sequence[Any] | None = None,
+    preencoded_wrist_images: Sequence[Any] | None = None,
     embedded_runtime_config_yaml: str | None = None,
     embedded_runtime_request_json: str | None = None,
 ) -> dict[str, Any]:
@@ -273,35 +331,13 @@ def build_rl4vla_raw_episode_payload(
     if len(infos) != len(actions):
         raise ValueError("infos must contain exactly as many items as actions")
 
-    if preencoded_images is None:
-        step_aligned_images = [
-            _encode_frame_to_jpeg_uint8_buffer(
-                _resize_frame_to_canvas(
-                    frame,
-                    target_width=resolved_image_target_width,
-                    target_height=resolved_image_target_height,
-                )
-            )
-            for frame in images[:-1]
-        ]
-    else:
-        if len(preencoded_images) != len(images):
-            raise ValueError("preencoded_images must contain exactly as many items as images")
-        step_aligned_images = []
-        for idx, item in enumerate(preencoded_images[:-1]):
-            if isinstance(item, np.ndarray):
-                encoded = np.asarray(item, dtype=np.uint8)
-                if encoded.ndim != 1:
-                    raise ValueError(
-                        f"preencoded_images[{idx}] must be a 1D uint8 numpy array"
-                    )
-                step_aligned_images.append(encoded.copy())
-            elif isinstance(item, (bytes, bytearray)):
-                step_aligned_images.append(np.frombuffer(bytes(item), dtype=np.uint8).copy())
-            else:
-                raise ValueError(
-                    f"preencoded_images[{idx}] must be JPEG bytes or a 1D uint8 numpy array"
-                )
+    step_aligned_images = _encode_rl4vla_step_aligned_images(
+        images,
+        image_target_width=resolved_image_target_width,
+        image_target_height=resolved_image_target_height,
+        preencoded_images=preencoded_images,
+        label="preencoded_images",
+    )
 
     action_array = np.asarray(actions, dtype=np.float32)
     if action_array.ndim != 2 or action_array.shape[1] != 7:
@@ -328,6 +364,17 @@ def build_rl4vla_raw_episode_payload(
         "result": resolved_result,
         "source": resolved_source,
     }
+    if wrist_images is not None:
+        if len(wrist_images) != len(images):
+            raise ValueError("wrist_images must contain exactly as many items as images")
+        payload["image_wrist"] = _encode_rl4vla_step_aligned_images(
+            wrist_images,
+            image_target_width=resolved_image_target_width,
+            image_target_height=resolved_image_target_height,
+            preencoded_images=preencoded_wrist_images,
+            label="preencoded_wrist_images",
+        )
+        payload["camera_names"] = ["base_camera", "wrist_camera"]
     if resolved_embedded_runtime_config_yaml is not None:
         payload["embedded_runtime_config_yaml"] = resolved_embedded_runtime_config_yaml
     if resolved_embedded_runtime_request_json is not None:
@@ -348,6 +395,8 @@ def write_rl4vla_raw_episode_artifact(
     image_target_height: int = DEFAULT_RL4VLA_IMAGE_HEIGHT,
     compress: bool | None = None,
     preencoded_images: Sequence[Any] | None = None,
+    wrist_images: Sequence[Any] | None = None,
+    preencoded_wrist_images: Sequence[Any] | None = None,
     embedded_runtime_config_yaml: str | None = None,
     embedded_runtime_request_json: str | None = None,
 ) -> Path:
@@ -361,6 +410,8 @@ def write_rl4vla_raw_episode_artifact(
         image_target_width=image_target_width,
         image_target_height=image_target_height,
         preencoded_images=preencoded_images,
+        wrist_images=wrist_images,
+        preencoded_wrist_images=preencoded_wrist_images,
         embedded_runtime_config_yaml=embedded_runtime_config_yaml,
         embedded_runtime_request_json=embedded_runtime_request_json,
     )
