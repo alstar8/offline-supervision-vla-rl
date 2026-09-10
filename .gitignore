@@ -20,3 +20,17 @@ temp/
 exp_local/
 
 openvla/models
+
+# Large local artifacts and checkpoints (GitHub 100MB file limit)
+*.safetensors
+**/training_state.pt
+sim2real/assets/360_photos/
+
+# Episode dumps, wandb checkpoints, pids. Keep launch scripts, videos, SFT stats.
+sim2real/runs/**
+!sim2real/runs/**/
+!sim2real/runs/**/*.sh
+!sim2real/runs/**/*.py
+!sim2real/runs/**/sft_episode_stats.json
+!sim2real/runs/**/videos/
+!sim2real/runs/**/videos/**
