@@ -557,7 +557,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--action-remap-rpy-deg",
         default=",".join(str(v) for v in real_eval.ACTION_REMAP_RPY_DEG),
-        help="Used only on --target real. Default is eval_openvla_real Rz(-90).",
+        help="Used only on --target real. Default matches eval_openvla_real (identity).",
     )
     parser.add_argument("--robot-ip", default=real_eval.RC5_IP)
     parser.add_argument("--scene-json", type=Path, default=real_eval.DEFAULT_SCENE_JSON)

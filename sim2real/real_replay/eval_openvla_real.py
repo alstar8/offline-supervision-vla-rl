@@ -4,9 +4,10 @@
 Observation matches OpenReal2Sim PPO eval: ZED2 scene resized to 640x480 with a
 RealSense D405 wrist inset in the bottom-right. Actions are 7D EE deltas
 (xyz meters, rpy radians, gripper) unnormalized with the checkpoint stats.
-Sim-base xyz/rpy are remapped into the real RC5 base (default Rz(-90°)) before
-they are sent; gripper is left as the model predicted it. Translation/rotation
-deltas accumulate on a target TCP (sim ``use_target=True``), not on the live pose.
+Sim-base xyz/rpy are applied in the real RC5 base with no extra yaw
+(matching ``run_checkpoint_real.py`` and NPZ replay). Gripper is left as
+the model predicted it. Translation/rotation deltas accumulate on a target
+TCP (sim ``use_target=True``), not on the live pose.
 
 Usage:
     # Always dry-run first (loads the model, dummy frames, no hardware):
@@ -72,10 +73,11 @@ HOME_TCP_M_DEG = (-0.160111, 0.396493, 0.32875, 95.567035, -10.529792, -96.42384
 HOME_JOINT_SPEED = 25.0
 HOME_JOINT_ACCEL = 25.0
 
-# Sim ee_align2 deltas live in the sim robot-base frame. Teleop profile
-# rc5_teleop_v1 maps real→sim with Rz(+90°). This is the inverse, sim→real.
-# Matches the measured home: real J1 = sim J1 + 90°. Gripper is unchanged.
-ACTION_REMAP_RPY_DEG = (0.0, 0.0, -90.0)
+# Joint-1 +90° is only a qpos home convention. Cartesian VLA deltas are already
+# in the robot-base frame used by the RC5 TCP API; the proven desktop eval and
+# NPZ replay apply them with identity. Teleop's Rz(+90°) is real→sim for the
+# human stick, not sim→real for the policy. Use --action-remap-rpy-deg if needed.
+ACTION_REMAP_RPY_DEG = (0.0, 0.0, 0.0)
 
 WP_SPEED = 0.10
 WP_ACCEL = 0.10
@@ -565,7 +567,7 @@ def _parse_args() -> argparse.Namespace:
         "--action-remap-rpy-deg",
         default=",".join(str(v) for v in ACTION_REMAP_RPY_DEG),
         help="RPY degrees applied to sim xyz/rpy deltas before sending to the real RC5. "
-        "Default is the inverse of teleop rc5_teleop_v1 (0,0,-90). Use 0,0,0 to disable.",
+        "Default is identity (0,0,0). Try 0,0,90 or 0,0,-90 only if XY is still rotated.",
     )
     parser.add_argument("--robot-ip", default=RC5_IP)
     parser.add_argument("--scene-json", type=Path, default=DEFAULT_SCENE_JSON)
@@ -720,7 +722,7 @@ def main() -> None:
         }
         (output_dir / "run_summary.json").write_text(json.dumps(summary, indent=2))
         print(f"Running {args.steps} steps at {args.hz} Hz. Ctrl+C = E-stop.\n")
-        print("  Waypoints accumulate on a target TCP (sim use_target=True), after Rz(-90) remap.")
+        print("  Waypoints accumulate on a target TCP (sim use_target=True).")
         step_interval = 1.0 / args.hz
         target_pose = list(pose)
 
