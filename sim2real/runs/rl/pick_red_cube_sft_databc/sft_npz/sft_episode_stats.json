@@ -1,0 +1,12 @@
+{
+  "n_episodes": 100,
+  "steps_min": 36,
+  "steps_median": 53.5,
+  "steps_mean": 54.42,
+  "steps_p95": 65.14999999999999,
+  "steps_p99": 74.03000000000002,
+  "steps_max": 77,
+  "recommended_episode_len": 96,
+  "src_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/offline-supervision-vla-rl/sim2real/runs/manual/pick_red_cube_100",
+  "dest_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/offline-supervision-vla-rl/sim2real/runs/rl/pick_red_cube_sft_databc/sft_npz"
+}

@@ -10,6 +10,8 @@ import numpy as np
 
 
 def filter_small_actions(actions, pos_thresh=0.01, rot_thresh=0.06, check_gripper=True):
+    if os.environ.get("RLVLA_SFT_DISABLE_FILTER", "0") == "1":
+        return np.ones(len(np.asarray(actions)), dtype=bool)
     actions = np.asarray(actions)
     N = actions.shape[0]
     valid_mask = np.zeros(N, dtype=bool)
@@ -40,8 +42,8 @@ def filter_small_actions(actions, pos_thresh=0.01, rot_thresh=0.06, check_grippe
 
     return valid_mask
 
-class ExampleDataset(tfds.core.GeneratorBasedBuilder):
-    """DatasetBuilder for example dataset."""
+class Sft(tfds.core.GeneratorBasedBuilder):
+    """DatasetBuilder for the pick-red-cube SFT dataset."""
 
     VERSION = tfds.core.Version('1.0.0')
     RELEASE_NOTES = {

@@ -51,6 +51,9 @@ class Args:
     use_same_init: bool = False
     rollouts_per_update: int = 1
     use_default_task: bool = False
+    use_wrist_camera: bool = True
+    stop_success_rate: float = 0.0
+    stop_success_windows: int = 1
 
     steps_max: int = 2000000
     steps_vh: int = 0  # episodes
@@ -882,6 +885,8 @@ class Runner:
     def run(self):
         max_episodes = self.args.steps_max // (self.args.episode_len * self.args.rollouts_per_update) // self.args.num_envs
         train_start = time.time()
+        success_windows = 0
+        skip_ood_eval = self.args.env_id == "OpenReal2Sim-v0"
 
         for episode in range(max_episodes):
             env_infos = defaultdict(lambda: [])
@@ -953,25 +958,57 @@ class Runner:
             returns_text = f"{returns_mean:.6f}" if returns_mean is not None else "n/a"
             print(f"reward_mean={reward_text} | returns_mean={returns_text}")
 
+            rollout_success = float(env_metrics.get("env/success", 0.0))
+            if self.args.stop_success_rate > 0.0 and rollout_success >= self.args.stop_success_rate:
+                success_windows += 1
+                print(
+                    f"Success-rate stop window {success_windows}/{self.args.stop_success_windows} "
+                    f"(env/success={rollout_success:.4f} >= {self.args.stop_success_rate:.4f})"
+                )
+            else:
+                success_windows = 0
+
+            reached_success_stop = (
+                self.args.stop_success_rate > 0.0
+                and success_windows >= max(1, int(self.args.stop_success_windows))
+            )
+
             # eval
-            if episode % self.args.interval_eval == self.args.interval_eval - 1 or episode == max_episodes - 1:
+            if (
+                episode % self.args.interval_eval == self.args.interval_eval - 1
+                or episode == max_episodes - 1
+                or reached_success_stop
+            ):
                 print(f"Evaluating at {steps}")
                 sval_stats = self.eval(obj_set="train")
                 sval_stats = {f"eval/{k}": v for k, v in sval_stats.items()}
                 wandb.log(sval_stats, step=steps)
 
-                sval_stats = self.eval(obj_set="test")
-                sval_stats = {f"eval/{k}_ood": v for k, v in sval_stats.items()}
-                wandb.log(sval_stats, step=steps)
+                if not skip_ood_eval:
+                    sval_stats = self.eval(obj_set="test")
+                    sval_stats = {f"eval/{k}_ood": v for k, v in sval_stats.items()}
+                    wandb.log(sval_stats, step=steps)
 
             # save
-            if episode % self.args.interval_save == self.args.interval_save - 1 or episode == max_episodes - 1:
+            if (
+                episode % self.args.interval_save == self.args.interval_save - 1
+                or episode == max_episodes - 1
+                or reached_success_stop
+            ):
                 print(f"Saving model at {steps}")
                 save_path = self.glob_dir / f"steps_{episode:0>4d}"
                 self.policy.save(save_path)
 
                 self.render(epoch=episode, obj_set="train")
-                self.render(epoch=episode, obj_set="test")
+                if not skip_ood_eval:
+                    self.render(epoch=episode, obj_set="test")
+
+            if reached_success_stop:
+                print(
+                    f"Stopping: env/success reached {self.args.stop_success_rate:.4f} "
+                    f"for {success_windows} consecutive update(s)."
+                )
+                break
 
 
 def main():
