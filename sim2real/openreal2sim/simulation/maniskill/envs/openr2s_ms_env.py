@@ -55,18 +55,26 @@ from ..utils.transform_utils import opencv_to_sapien_pose, qvec2rotmat
 WRIST_CAMERA_NAME = "wrist_camera"
 WRIST_CAMERA_WIDTH = 168
 WRIST_CAMERA_HEIGHT = 224
-WRIST_CAMERA_FOV = 1.5000000000000002
+# Vertical FOV of the D405 colour stream as the policy sees it on hardware:
+# the 640x480 frame is rotated by np.rot90, so the inset's vertical axis is
+# the sensor's horizontal one, 2*atan(640/(2*fx)) with fx=391.8. Both the
+# rotated frame and the 168x224 inset are 4:3, so this matches the horizontal
+# FOV too (63.0 deg). Was 1.5, i.e. 85.9 x 69.9 deg against 78.5 x 63.0 real.
+WRIST_CAMERA_FOV = 1.3697
 WRIST_CAMERA_NEAR = 0.01
 WRIST_CAMERA_FAR = 2.0
 WRIST_CAMERA_FAR_PANO = 100.0
 WRIST_CAMERA_MOUNT_LINKS = ("prehand", "prehand_cam")
-WRIST_CAMERA_LOCAL_P = [0.0, 0.06750000000000002, 0.060600000000000015]
-WRIST_CAMERA_LOCAL_Q = [
-    0.7071067811865476,
-    -0.0,
-    0.7071067811865475,
-    0.0,
-]
+# Pose of the real D405 in the `prehand` link, from eye-in-hand calibration
+# against a ChArUco board (2026-09-11, 15 poses; leave-one-out std about
+# [0.3, 0.5, 1.1] mm and 0.03 deg -- sim2real/real_replay/calibrate_wrist_handeye.py
+# and handeye_to_sim.py). Against the previous CAD pose [0, 0.0675, 0.0606] the
+# camera sits +8.85 mm along x: the D405 colour/depth origin is its left imager,
+# ~9 mm off the mounting axis, not the housing centreline. The orientation is
+# the camera the policy sees on hardware, i.e. after the np.rot90 that
+# eval_openvla_real.py applies to the raw D405 frame.
+WRIST_CAMERA_LOCAL_P = [0.00885, 0.06773, 0.06504]
+WRIST_CAMERA_LOCAL_Q = [0.711969, -0.017879, 0.701977, 0.002846]
 THIRD_VIEW_CAMERA_NAME = "3rd_view_camera"
 THIRD_VIEW_WIDTH = 640
 THIRD_VIEW_HEIGHT = 480

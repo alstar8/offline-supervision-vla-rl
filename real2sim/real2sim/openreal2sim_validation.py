@@ -68,18 +68,21 @@ SENSOR_HEIGHT = 480
 WRIST_CAMERA_NAME = "wrist_camera"
 WRIST_CAMERA_WIDTH = 168
 WRIST_CAMERA_HEIGHT = 224
-WRIST_CAMERA_FOV = 1.5000000000000002
+# Same value as WRIST_CAMERA_FOV in openr2s_ms_env.py -- the measured D405
+# vertical FOV after np.rot90. Keep the two in sync.
+WRIST_CAMERA_FOV = 1.3697
 WRIST_CAMERA_NEAR = 0.01
 WRIST_CAMERA_FAR = 2.0
-# Wrist camera calibration from real2sim/debug/wrist_camera_calibration/wrist_camera_latest.txt.
+# Wrist camera pose from eye-in-hand calibration of the real D405 (2026-09-11);
+# the same values as WRIST_CAMERA_LOCAL_P/Q in
+# sim2real/openreal2sim/simulation/maniskill/envs/openr2s_ms_env.py -- keep the
+# two in sync. They are expressed in the `prehand` link. The mount link below,
+# "prehand_cam", is the D405 housing mesh name, not a link: no URDF in this repo
+# defines it, so with the repo assets _rc5_wrist_camera_config() returns None
+# and no wrist camera is created here. The sim2real env mounts on "prehand".
 WRIST_CAMERA_MOUNT_LINK = "prehand_cam"
-WRIST_CAMERA_LOCAL_P = [0.0, 0.06750000000000002, 0.060600000000000015]
-WRIST_CAMERA_LOCAL_Q = [
-    0.7071067811865476,
-    -0.0,
-    0.7071067811865475,
-    0.0,
-]
+WRIST_CAMERA_LOCAL_P = [0.00885, 0.06773, 0.06504]
+WRIST_CAMERA_LOCAL_Q = [0.711969, -0.017879, 0.701977, 0.002846]
 DEFAULT_USE_WRIST_CAMERA = True
 AIRI_CUBES_VR_ROTATION_GAIN = 3.0
 AIRI_CUBES_ACTION_TRANSLATION_CLAMP_M = 0.04
