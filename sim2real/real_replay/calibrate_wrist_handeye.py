@@ -39,9 +39,7 @@ RS_W, RS_H = 640, 480
 CAMERA_FPS = 30
 RC5_IP = "10.10.10.10"
 
-# The lab board: 25 mm checkers, 18 mm DICT_5X5 markers. It reads as 7x11 when
-# held portrait, but its marker-ID layout is 11 squares along X: described as
-# 7x11 the markers are still found and ChArUco interpolates zero corners.
+# The lab board: 25 mm checkers, 18 mm DICT_5X5 markers.
 DEFAULT_DICT = "DICT_5X5_50"
 DEFAULT_SQUARES_X = 11
 DEFAULT_SQUARES_Y = 7
