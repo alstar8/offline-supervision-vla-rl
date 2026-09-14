@@ -73,7 +73,16 @@ WRIST_CAMERA_MOUNT_LINKS = ("prehand", "prehand_cam")
 # ~9 mm off the mounting axis, not the housing centreline. The orientation is
 # the camera the policy sees on hardware, i.e. after the np.rot90 that
 # eval_openvla_real.py applies to the raw D405 frame.
-WRIST_CAMERA_LOCAL_P = [0.00885, 0.06773, 0.06504]
+# WRIST_CAMERA_LOCAL_P is that pose moved 15 mm back along the optical axis
+# (calibrated: [0.00885, 0.06773, 0.06504]). Rendered from the calibrated pose
+# the hand looks larger than in real wrist frames; 15 mm back matches best
+# (hand-silhouette IoU 0.708 -> 0.753 straight, 0.731 -> 0.745 HAND_HOLD;
+# palm/wrist contour 6.1 -> 4.5 px; 2026-09-14). It disagrees with the
+# calibration by those 15 mm, which an oversized hand mesh would also explain.
+# The calibrated pose sits at the front face of the `prehand` mesh; from here its
+# green wrist cover shows at the wrist edge of the image, as it does in real
+# frames. Past ~25 mm back the match degrades; at 40 mm the camera is inside it.
+WRIST_CAMERA_LOCAL_P = [0.00863, 0.06805, 0.08004]
 WRIST_CAMERA_LOCAL_Q = [0.711969, -0.017879, 0.701977, 0.002846]
 THIRD_VIEW_CAMERA_NAME = "3rd_view_camera"
 THIRD_VIEW_WIDTH = 640

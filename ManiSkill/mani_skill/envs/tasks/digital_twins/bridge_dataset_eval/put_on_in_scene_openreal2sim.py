@@ -87,17 +87,22 @@ ROBOT_BLACK_RGBA = sapien_utils.hex2rgba("#2b2b2b")
 WRIST_CAMERA_NAME = "wrist_camera"
 WRIST_CAMERA_WIDTH = 168
 WRIST_CAMERA_HEIGHT = 224
-WRIST_CAMERA_FOV = 1.5000000000000002
+# Same value as WRIST_CAMERA_FOV in openr2s_ms_env.py -- the measured D405
+# vertical FOV after np.rot90. Keep the two in sync.
+WRIST_CAMERA_FOV = 1.3697
 WRIST_CAMERA_NEAR = 0.01
 WRIST_CAMERA_FAR = 2.0
+# Wrist camera pose from eye-in-hand calibration of the real D405 (2026-09-11),
+# moved 15 mm back along the optical axis (see openr2s_ms_env.py);
+# the same values as WRIST_CAMERA_LOCAL_P/Q in
+# sim2real/openreal2sim/simulation/maniskill/envs/openr2s_ms_env.py -- keep the
+# two in sync. They are expressed in the `prehand` link.
+# The mount link below, "prehand_cam", is the D405 housing mesh name, not a link:
+# no URDF in this repo defines it, so _rc5_wrist_camera_config() returns None
+# and no wrist camera is created here. The sim2real env mounts on "prehand".
 WRIST_CAMERA_MOUNT_LINK = "prehand_cam"
-WRIST_CAMERA_LOCAL_P = [0.0, 0.06750000000000002, 0.060600000000000015]
-WRIST_CAMERA_LOCAL_Q = [
-    0.7071067811865476,
-    -0.0,
-    0.7071067811865475,
-    0.0,
-]
+WRIST_CAMERA_LOCAL_P = [0.00863, 0.06805, 0.08004]
+WRIST_CAMERA_LOCAL_Q = [0.711969, -0.017879, 0.701977, 0.002846]
 DEFAULT_USE_WRIST_CAMERA = True
 
 def _pose_from_eye_target_roll(eye: np.ndarray, target: np.ndarray, roll_deg: float = 0.0) -> sapien.Pose:

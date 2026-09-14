@@ -80,20 +80,34 @@ class RC5AeroHandOpenR2S(BaseAgent):
     hand_damping = 8
     hand_force_limit = 20
 
-    # Preset hand postures for the first OpenVLA-compatible adapter.
+    # Preset hand postures for the OpenVLA-compatible adapter, matched to the real
+    # AeroHand as the D405 wrist camera sees it: eval-frame silhouettes and edges
+    # against sim renders through the wrist camera in openr2s_ms_env.py (2026-09-14).
+    # The SDK's 7 slots (deg) are thumb_abd, thumb_flex, thumb_mcp_ip, index,
+    # middle, ring, pinky; a finger slot drives mcp_flex/pip/dip together. The
+    # fingers follow the command 1:1. At the same command the real thumb is more
+    # abducted than the URDF: +34 deg at 0, +20 deg at 70 (HAND_HOLD [70, 3.5, 14,
+    # ...] renders as thumb 90/0/7 deg). Thumb cmc_flex trades off against
+    # abduction in this view and is the least certain value.
+    # open:  real HAND_STRAIGHT [0]*7 -> thumb abd 33.8 deg, flex 1.1 deg, rest 0.
+    #        Was all zeros, a thumb pose the real hand never shows.
+    # close: real HAND_CLOSE [100, 55, 30, 60, 60, 60, 60] -> thumb 100/40/60/60 deg,
+    #        fingers at the commanded 60 deg (the closed-hand view does not resolve
+    #        the finger curl). Was [0.45, 0.45, 0.70, 0.70] + [0.90, 1.00, 0.80] per
+    #        finger, which sticks out past the real closed hand.
     canonical_hand_open_qpos = [
-        0.0, 0.0, 0.0, 0.0,
+        0.5899, 0.0192, 0.0, 0.0,
         0.0, 0.0, 0.0,
         0.0, 0.0, 0.0,
         0.0, 0.0, 0.0,
         0.0, 0.0, 0.0,
     ]
     canonical_hand_close_qpos = [
-        0.45, 0.45, 0.70, 0.70,
-        0.90, 1.00, 0.80,
-        0.90, 1.00, 0.80,
-        0.90, 1.00, 0.80,
-        0.90, 1.00, 0.80,
+        1.7453, 0.6981, 1.0472, 1.0472,
+        1.0472, 1.0472, 1.0472,
+        1.0472, 1.0472, 1.0472,
+        1.0472, 1.0472, 1.0472,
+        1.0472, 1.0472, 1.0472,
     ]
     hand_open_qpos = list(canonical_hand_open_qpos)
     hand_close_qpos = list(canonical_hand_close_qpos)
