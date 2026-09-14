@@ -61,10 +61,33 @@ HAND_HOLD = [70.0, 3.5, 14.0, 37.4, 29.4, 30.2, 29.4]
 for _name, _value, _hi in zip(HAND_SLOT_NAMES, HAND_HOLD, HAND_SLOT_UPPER):
     if not 0.0 <= _value <= _hi:
         raise ValueError(f"HAND_HOLD[{_name}]={_value} outside the joint limit 0..{_hi}")
+# All fingers straight: the command whose look the sim open preset
+# (canonical_hand_open_qpos in rc5_aero_hand_openr2s.py) is matched to, thumb
+# abduction included. The thumb also sits ~96 mm higher relative to the TCP than
+# HAND_HOLD, whose thumb tip hangs ~127 mm below it.
+HAND_STRAIGHT = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+APPROACH_HANDS = {"hold": HAND_HOLD, "straight": HAND_STRAIGHT}
 
 WORKSPACE_X = (-0.60, 0.10)
 WORKSPACE_Y = (0.15, 0.90)
-WORKSPACE_Z = (0.08, 0.90)
+# The floor used to be 0.08, which sits below the table: the policy descended
+# into it and the clip happily held the target there while the arm kept
+# pressing, tripping the controller twice. Measured hand-vs-table contact over
+# those runs (HAND_HOLD approach, thumb tip lowest) was z = 0.100 / 0.122 /
+# 0.132 depending on wrist orientation. 0.15 is where a HAND_HOLD grasp on the
+# cube closes, and it clears the worst of those contacts by 18 mm. The straight
+# approach hand sits ~96 mm higher, but the closed hand still reaches ~78 mm
+# below the TCP; the straight-hand run of 2026-09-11 used --workspace-z-min 0.10.
+WORKSPACE_Z = (0.15, 0.90)
+# Abort guards. A pinned target on its own means only that the policy asked to
+# leave the box: with the arm lagging the commanded target by tens of mm it can
+# pin while the arm is still far from the bound and moving normally. So the
+# clip only counts once the arm itself has reached the bound. The second guard
+# is position-independent: a commanded move the arm does not follow.
+STALL_ABORT_STEPS = 4
+STALL_PROGRESS_M = 0.002
+STALL_COMMAND_M = 0.004
+LIMIT_MARGIN_M = 0.010
 
 # Measured on this RC5 after placing the arm in the real pick-red-cube home
 # (2026-09-10 14:06). Joints are commanded; TCP is recorded for logs.
@@ -72,6 +95,12 @@ HOME_JOINTS_DEG = (106.345596, -93.485413, -101.003151, 179.99073, -157.6054, -2
 HOME_TCP_M_DEG = (-0.160111, 0.396493, 0.32875, 95.567035, -10.529792, -96.423843)
 HOME_JOINT_SPEED = 25.0
 HOME_JOINT_ACCEL = 25.0
+# wait_waypoint_completion() returns once the controller's waypoint buffer
+# drains, which happens when the last point is taken for execution -- not when
+# the arm has arrived. Homing therefore has to poll the joints itself.
+HOME_SETTLE_TOL_DEG = 0.5
+HOME_SETTLE_TIMEOUT_SEC = 10.0
+HOME_SETTLE_POLL_SEC = 0.05
 
 # Joint-1 +90° is only a qpos home convention. Cartesian VLA deltas are already
 # in the robot-base frame used by the RC5 TCP API; the proven desktop eval and
@@ -80,7 +109,15 @@ HOME_JOINT_ACCEL = 25.0
 ACTION_REMAP_RPY_DEG = (0.0, 0.0, 0.0)
 
 WP_SPEED = 0.10
-WP_ACCEL = 0.10
+# A control step commands up to max_translation_step (18 mm) and the loop runs
+# at ~3.3 Hz, so a waypoint gets ~300 ms to execute. Measured over identical
+# 65-step episodes: 0.10 tracked 53% of the commanded path with the lag growing
+# to 215 mm, 0.30 tracked 94% (final lag 45 mm), 0.80 tracked 96% (16 mm).
+# The lag matters beyond tracking quality -- the policy sees a frame taken where
+# the arm is but aims from where the target already ran to -- and it also makes
+# every target-vs-actual guard noisy. WP_SPEED still caps the arm at 100 mm/s,
+# so this does not make the arm faster, only able to reach that cap in a step.
+WP_ACCEL = 0.80
 WP_BLEND = 0.01
 
 SCENE_W, SCENE_H = 640, 480
@@ -289,6 +326,18 @@ def _clip_pose(pose: list[float], workspace: dict[str, tuple[float, float]]) -> 
     return clipped, changed
 
 
+def _axes_at_workspace_limit(
+    pose: list[float], workspace: dict[str, tuple[float, float]]
+) -> list[str]:
+    """Axes on which the arm itself sits within LIMIT_MARGIN_M of a bound."""
+    touching = []
+    for index, key in enumerate(("x", "y", "z")):
+        lo, hi = workspace[key]
+        if pose[index] <= lo + LIMIT_MARGIN_M or pose[index] >= hi - LIMIT_MARGIN_M:
+            touching.append(key)
+    return touching
+
+
 def _gripper_closed(gripper: float) -> bool:
     # Match SimplerEnv: open_gripper > 0.5 stays open, otherwise close.
     return float(gripper) <= 0.5
@@ -464,6 +513,35 @@ def _get_robot_joints_deg(robot) -> list[float]:
     return [float(v) for v in robot.motion.joint.get_actual_position(units="deg")]
 
 
+def _joint_error_deg(robot, target_joints_deg: list[float]) -> tuple[list[float], float]:
+    actual = _get_robot_joints_deg(robot)
+    worst = max(
+        abs(_wrap_degrees_near(a, t) - t) for a, t in zip(actual, target_joints_deg)
+    )
+    return actual, float(worst)
+
+
+def _await_joints_settled(robot, target_joints_deg: list[float], *, context: str = "home") -> bool:
+    """Poll the joints until they actually reach the commanded configuration.
+
+    The SDK only exposes the waypoint-buffer fill level, so an empty buffer is
+    the earliest possible "done" signal rather than the arm having stopped.
+    """
+    label = f" ({context})" if context else ""
+    deadline = time.monotonic() + HOME_SETTLE_TIMEOUT_SEC
+    _actual, worst = _joint_error_deg(robot, target_joints_deg)
+    while worst > HOME_SETTLE_TOL_DEG and time.monotonic() < deadline:
+        time.sleep(HOME_SETTLE_POLL_SEC)
+        _actual, worst = _joint_error_deg(robot, target_joints_deg)
+    if worst > HOME_SETTLE_TOL_DEG:
+        print(
+            f"  [skip] joints did not settle{label}: worst error {worst:.3f} deg "
+            f"> {HOME_SETTLE_TOL_DEG} deg after {HOME_SETTLE_TIMEOUT_SEC:.0f} s"
+        )
+        return False
+    return True
+
+
 def _send_joint_waypoint(robot, target_joints_deg: list[float], *, context: str = "home") -> bool:
     label = f" ({context})" if context else ""
     try:
@@ -477,8 +555,10 @@ def _send_joint_waypoint(robot, target_joints_deg: list[float], *, context: str 
         if not _start_move_if_needed(robot, await_sec=30):
             print(f"  [skip] could not enter MOVE{label}")
             return False
-        robot.motion.wait_waypoint_completion(30)
-        return True
+        if not robot.motion.wait_waypoint_completion(30):
+            print(f"  [skip] waypoint buffer did not drain within 30 s{label}")
+            return False
+        return _await_joints_settled(robot, target_joints_deg, context=context)
     except Exception as exc:
         if type(exc).__name__ != "AddWaypointError" and "waypoint" not in str(exc).lower():
             raise
@@ -564,6 +644,24 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-translation-step", type=float, default=0.018)
     parser.add_argument("--max-rotation-step", type=float, default=0.20)
     parser.add_argument(
+        "--workspace-z-min",
+        type=float,
+        default=WORKSPACE_Z[0],
+        help="Lowest commandable TCP height. The default clears the table; see WORKSPACE_Z.",
+    )
+    parser.add_argument(
+        "--stall-abort-steps",
+        type=int,
+        default=STALL_ABORT_STEPS,
+        help="Abort after this many consecutive stalled steps (0 disables the check)",
+    )
+    parser.add_argument(
+        "--approach-hand",
+        choices=sorted(APPROACH_HANDS),
+        default="hold",
+        help="Hand pose while the gripper is open. 'straight' matches the sim training open preset.",
+    )
+    parser.add_argument(
         "--action-remap-rpy-deg",
         default=",".join(str(v) for v in ACTION_REMAP_RPY_DEG),
         help="RPY degrees applied to sim xyz/rpy deltas before sending to the real RC5. "
@@ -601,7 +699,16 @@ def main() -> None:
     frames_dir = output_dir / "frames"
     frames_dir.mkdir(exist_ok=True)
 
-    workspace = {"x": WORKSPACE_X, "y": WORKSPACE_Y, "z": WORKSPACE_Z}
+    workspace = {
+        "x": WORKSPACE_X,
+        "y": WORKSPACE_Y,
+        "z": (float(args.workspace_z_min), WORKSPACE_Z[1]),
+    }
+    if args.workspace_z_min < WORKSPACE_Z[0]:
+        print(
+            f"  [warn] workspace z floor lowered to {args.workspace_z_min:.3f} "
+            f"(default {WORKSPACE_Z[0]:.3f}); hand-vs-table contact was measured as low as 0.100"
+        )
     remap_rpy_deg = tuple(float(part) for part in str(args.action_remap_rpy_deg).split(","))
     if len(remap_rpy_deg) != 3:
         raise ValueError(f"--action-remap-rpy-deg must be three comma-separated numbers, got {args.action_remap_rpy_deg!r}")
@@ -654,6 +761,8 @@ def main() -> None:
     step = 0
     grip_closed = False
     home_joints = None
+    abort_reason = None
+    failure = None
     try:
         print("Connecting to RC5...")
         robot = _init_rc5(args.robot_ip)
@@ -688,7 +797,7 @@ def main() -> None:
         else:
             raise ValueError(f"unsupported home mode: {args.home_mode}")
 
-        hand.set_joint_positions(HAND_HOLD)
+        hand.set_joint_positions(APPROACH_HANDS[args.approach_hand])
         if not args.no_confirm:
             if sys.stdin.isatty():
                 input("\nScene ready? Place the cube, then press ENTER to start...")
@@ -715,6 +824,8 @@ def main() -> None:
             "action_remap_rpy_deg": [float(v) for v in remap_rpy_deg],
             "workspace": workspace,
             "home_mode": args.home_mode,
+            "approach_hand": args.approach_hand,
+            "approach_hand_deg": list(APPROACH_HANDS[args.approach_hand]),
             "home_joints_target_deg": [round(v, 6) for v in HOME_JOINTS_DEG],
             "home_tcp_m_deg": [round(v, 6) for v in HOME_TCP_M_DEG],
             "home_joints_deg": None if home_joints is None else [round(float(v), 6) for v in home_joints],
@@ -725,6 +836,9 @@ def main() -> None:
         print("  Waypoints accumulate on a target TCP (sim use_target=True).")
         step_interval = 1.0 / args.hz
         target_pose = list(pose)
+        stall_steps = 0
+        prev_tcp = list(pose)
+        abort_reason = None
 
         while step < args.steps and not _STOP:
             t0 = time.monotonic()
@@ -738,10 +852,20 @@ def main() -> None:
                 max_rotation_step_rad=args.max_rotation_step,
             )
             target_pose, clipped = _advance_target_pose(target_pose, applied, workspace)
+            current_tcp = [float(v) for v in robot.motion.linear.get_actual_position(orientation_units="deg")]
+            commanded_m = math.dist([0.0, 0.0, 0.0], [float(v) for v in applied[:3]])
+            progress_m = math.dist(prev_tcp[:3], current_tcp[:3])
+            at_limit = _axes_at_workspace_limit(current_tcp, workspace)
+            # Pinned target *and* the arm actually there -- not merely the arm
+            # trailing a target that ran into the bound ahead of it.
+            holding_bound = clipped and bool(at_limit)
+            blocked = commanded_m > STALL_COMMAND_M and progress_m < STALL_PROGRESS_M
+            stall_steps = stall_steps + 1 if (holding_bound or blocked) else 0
+            prev_tcp = current_tcp
             record = {
                 "step": step,
                 "prompt": _vla_prompt(args.instruction),
-                "current_tcp": [round(float(v), 6) for v in robot.motion.linear.get_actual_position(orientation_units="deg")],
+                "current_tcp": [round(v, 6) for v in current_tcp],
                 "target_tcp": [round(float(v), 6) for v in target_pose],
                 "raw_model_action": _action_to_dict(action),
                 "remapped_action": _action_to_dict(remapped),
@@ -749,6 +873,10 @@ def main() -> None:
                 "action_safety": safety,
                 "workspace_clipped": clipped,
                 "gripper_closed": _gripper_closed(applied[6]),
+                "commanded_m": round(commanded_m, 6),
+                "progress_m": round(progress_m, 6),
+                "at_workspace_limit": at_limit,
+                "stall_steps": int(stall_steps),
             }
             frame = np.asarray(image.convert("RGB"))
             frames.append(frame)
@@ -760,26 +888,57 @@ def main() -> None:
                 f"applied={[round(float(v), 5) for v in applied]} "
                 f"target={[round(float(v), 4) for v in target_pose[:3]]}"
             )
+            if args.stall_abort_steps > 0 and stall_steps >= args.stall_abort_steps:
+                cause = (
+                    f"arm held against the {'/'.join(at_limit)} bound"
+                    if holding_bound
+                    else f"arm did not follow a {commanded_m * 1000:.1f} mm command "
+                    f"(moved {progress_m * 1000:.1f} mm) -- blocked"
+                )
+                abort_reason = (
+                    f"{cause} for {stall_steps} consecutive steps at "
+                    f"tcp={[round(v, 4) for v in current_tcp[:3]]}"
+                )
+                print(f"  [abort] {abort_reason}")
+                step += 1
+                break
             _send_target_waypoint(robot, target_pose, workspace)
             new_closed = _gripper_closed(applied[6])
             if new_closed != grip_closed:
-                hand.set_joint_positions(HAND_CLOSE if new_closed else HAND_HOLD)
-                print(f"  step {step:04d}: gripper -> {'CLOSE' if new_closed else 'HOLD'}")
+                hand.set_joint_positions(HAND_CLOSE if new_closed else APPROACH_HANDS[args.approach_hand])
+                print(f"  step {step:04d}: gripper -> {'CLOSE' if new_closed else args.approach_hand.upper()}")
                 grip_closed = new_closed
             step += 1
             sleep_t = step_interval - (time.monotonic() - t0)
             if sleep_t > 0:
                 time.sleep(sleep_t)
+    except BaseException as exc:  # recorded for the summary, then re-raised
+        failure = f"{type(exc).__name__}: {exc}"
+        raise
     finally:
         _save_mp4(frames, output_dir / "rollout.mp4", fps=max(1, int(args.hz)))
         summary_path = output_dir / "run_summary.json"
         if summary_path.is_file():
+            if failure is not None:
+                status = "failed"
+            elif abort_reason is not None:
+                status = "aborted"
+            elif _STOP:
+                status = "stopped"
+            elif step >= int(args.steps):
+                status = "complete"
+            else:
+                status = "incomplete"
             summary = json.loads(summary_path.read_text())
             summary.update({
-                "status": "stopped" if _STOP else "complete",
+                "status": status,
                 "executed_steps": int(step),
+                "requested_steps": int(args.steps),
+                "abort_reason": abort_reason,
+                "failure": failure,
             })
             summary_path.write_text(json.dumps(summary, indent=2))
+            print(f"\nstatus={status} steps={step}/{int(args.steps)}")
         print("\nHolding RC5, opening hand.")
         if robot is not None:
             try:
