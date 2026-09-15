@@ -72,14 +72,83 @@ profiles:
         shadow: false
 
   tabletop_object_shadows_right: # Низкий скользящий свет справа; зеркальный вариант под object-shadow augmentation.
-    ambient_light: [0.10, 0.10, 0.10]
+    # Photo-calibrated fill; the reconstructed room must not shade as metal.
+    ambient_light: [0.81, 0.81, 0.81]
+    background_material:
+      base_color: [1.0, 1.0, 1.0, 1.0]
+      metallic: 0.0
+      specular: 0.0
     clear_color: [0.62, 0.62, 0.62, 1.0]
     directional_lights: []
+    point_lights:
+      - position: [-0.55, -0.95, 0.95]
+        color: [0.45675, 0.45675, 0.45675]
+        shadow: true
+      - position: [0.30, -0.90, 1.35]
+        color: [0.0252, 0.0252, 0.0252]
+        shadow: false
+
+  # Old KEY's tabletop_object_shadows_right transformed with the robot/table.
+  # Uses the old scene ground-plane Z=0.2587954751, not configured base Z=0.1204.
+  tabletop_object_shadows_right_scene14sep26_left:
+    ambient_light: [0.81, 0.81, 0.81]
+    background_material:
+      base_color: [1.0, 1.0, 1.0, 1.0]
+      metallic: 0.0
+      specular: 0.0
+    clear_color: [0.62, 0.62, 0.62, 1.0]
+    directional_lights: []
+    point_lights:
+      - position: [-0.489013734060, -0.881873119476, 1.015889663061]
+        color: [0.45675, 0.45675, 0.45675]
+        shadow: true
+      - position: [0.355816355458, -0.775749984182, 1.415889663061]
+        color: [0.0252, 0.0252, 0.0252]
+        shadow: false
+
+  # Selected variant B: explicit old effective lights, including former BaseEnv defaults.
+  # Keep current background material to isolate LIGHTING, not reproduce old assets.
+  tabletop_legacy_effective_reference:
+    ambient_light: [0.3, 0.3, 0.3]
+    background_material:
+      base_color: [1.0, 1.0, 1.0, 1.0]
+      metallic: 0.0
+      specular: 0.0
+    clear_color: [0.62, 0.62, 0.62, 1.0]
+    directional_lights:
+      - direction: [1.0, 1.0, -1.0]
+        color: [1.0, 1.0, 1.0]
+        shadow: false
+      - direction: [0.0, 0.0, -1.0]
+        color: [1.0, 1.0, 1.0]
+        shadow: false
     point_lights:
       - position: [-0.55, -0.95, 0.95]
         color: [1.45, 1.45, 1.45]
         shadow: true
       - position: [0.30, -0.90, 1.35]
+        color: [0.08, 0.08, 0.08]
+        shadow: false
+
+  tabletop_legacy_effective_reference_scene14sep26_left:
+    ambient_light: [0.3, 0.3, 0.3]
+    background_material:
+      base_color: [1.0, 1.0, 1.0, 1.0]
+      metallic: 0.0
+      specular: 0.0
+    clear_color: [0.62, 0.62, 0.62, 1.0]
+    directional_lights:
+      - direction: [0.9316532032149796, 1.0639653701785918, -1.0]
+        color: [1.0, 1.0, 1.0]
+        shadow: false
+      - direction: [0.0, 0.0, -1.0]
+        color: [1.0, 1.0, 1.0]
+        shadow: false
+    point_lights:
+      - position: [-0.489013734060, -0.881873119476, 1.015889663061]
+        color: [1.45, 1.45, 1.45]
+        shadow: true
+      - position: [0.355816355458, -0.775749984182, 1.415889663061]
         color: [0.08, 0.08, 0.08]
         shadow: false
 

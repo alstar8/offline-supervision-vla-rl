@@ -137,6 +137,8 @@ class PaddedCollatorForActionPrediction:
             attention_mask=attention_mask,
             labels=labels,
         )
+        if "proprio" in instances[0]:
+            output["proprio"] = torch.stack([instance["proprio"] for instance in instances])
         if dataset_names is not None:
             output["dataset_names"] = dataset_names
         return output

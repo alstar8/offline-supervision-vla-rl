@@ -29,7 +29,7 @@ from timm.models.vision_transformer import LayerScale
 from transformers import AutoModelForCausalLM, PretrainedConfig, PreTrainedModel, LogitsProcessor, LogitsProcessorList
 from transformers.modeling_outputs import ModelOutput
 
-from .configuration_prismatic import OpenVLAConfig, PrismaticConfig
+from .configuration_prismatic import OpenVLAConfig, OpenVLAV2Config, PrismaticConfig
 
 # Get Logger
 logger = logging.getLogger(__name__)
@@ -113,8 +113,8 @@ class PrismaticVisionBackbone(nn.Module):
                 if isinstance(module, LayerScale):
                     ls_apply_patch(module)
 
-    def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
-        """Run image (`pixel_values`) through featurizer; if channel-stacked, then dispatch and sequence stack."""
+    def _forward_single_image(self, pixel_values: torch.Tensor) -> torch.Tensor:
+        """Run a single image batch (`pixel_values :: [bsz, C, H, W]`) through the (fused) featurizer."""
         if not self.use_fused_vision_backbone:
             return self.featurizer(pixel_values)
 
@@ -123,6 +123,20 @@ class PrismaticVisionBackbone(nn.Module):
         patches, patches_fused = self.featurizer(img), self.fused_featurizer(img_fused)
 
         return torch.cat([patches, patches_fused], dim=2)
+
+    def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
+        """Run image (`pixel_values`) through featurizer; if channel-stacked, then dispatch and sequence stack.
+
+        Multi-image (multi-camera) inputs are passed as `[bsz, n_images, C, H, W]`; each image is featurized
+        independently and the resulting patch sequences are concatenated along the sequence dimension.
+        """
+        if pixel_values.dim() == 5:
+            per_image_patches = [
+                self._forward_single_image(pixel_values[:, idx]) for idx in range(pixel_values.shape[1])
+            ]
+            return torch.cat(per_image_patches, dim=1)
+
+        return self._forward_single_image(pixel_values)
 
 
 # === Prismatic Projector (nn.Module) Definitions ===
@@ -160,6 +174,24 @@ class PrismaticProjector(nn.Module):
         return projected_features
 
 
+# === Proprioceptive State Projector (OpenVLA-OFT style) ===
+class ProprioProjector(nn.Module):
+    """Projects a proprioceptive state vector into a single LLM embedding token."""
+
+    def __init__(self, proprio_dim: int, llm_dim: int) -> None:
+        super().__init__()
+        self.fc1 = nn.Linear(proprio_dim, llm_dim, bias=True)
+        self.fc2 = nn.Linear(llm_dim, llm_dim, bias=True)
+        self.act_fn1 = nn.GELU()
+
+    def forward(self, proprio: torch.Tensor) -> torch.Tensor:
+        """`proprio :: [bsz, proprio_dim]` =>> projected token `[bsz, 1, llm_dim]`."""
+        projected_features = self.fc1(proprio)
+        projected_features = self.act_fn1(projected_features)
+        projected_features = self.fc2(projected_features)
+        return projected_features.unsqueeze(1)
+
+
 # === Main HF Class Definitions ===
 @dataclass
 class PrismaticCausalLMOutputWithPast(ModelOutput):
@@ -180,7 +212,7 @@ class PrismaticPreTrainedModel(PreTrainedModel):
     base_model_prefix: str = "model"
     supports_gradient_checkpointing: bool = True
 
-    _no_split_modules: ClassVar[List[str]] = ["PrismaticProjector"]
+    _no_split_modules: ClassVar[List[str]] = ["PrismaticProjector", "ProprioProjector"]
     _skip_keys_device_placement: str = "past_key_values"
     _supports_flash_attn_2: bool = True
 
@@ -246,6 +278,16 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
             llm_dim=config.text_config.hidden_size,
         )
 
+        # [OpenVLA-OFT Extensions] Optional proprioceptive state projector + multi-image input bookkeeping
+        self.use_proprio = bool(getattr(config, "use_proprio", False))
+        self.proprio_dim = int(getattr(config, "proprio_dim", 7))
+        self.num_images_in_input = int(getattr(config, "num_images_in_input", 1))
+        self.proprio_projector = (
+            ProprioProjector(self.proprio_dim, config.text_config.hidden_size) if self.use_proprio else None
+        )
+        num_patches_per_image = self.vision_backbone.featurizer.patch_embed.num_patches
+        self.num_visual_tokens = num_patches_per_image * self.num_images_in_input + (1 if self.use_proprio else 0)
+
         # Instantiate LLM Backbone
         self.language_model = AutoModelForCausalLM.from_config(
             config.text_config, attn_implementation=config._attn_implementation
@@ -303,6 +345,7 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         output_projector_features: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        proprio: Optional[torch.FloatTensor] = None,
     ) -> Union[Tuple, PrismaticCausalLMOutputWithPast]:
         """Run a forward pass through the VLM, returning a PrismaticCausalLMOutputWithPast instance."""
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
@@ -334,7 +377,7 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
             new_position_ids = None
             if attention_mask is not None:
                 projected_patch_attention_mask = torch.full(
-                    (attention_mask.shape[0], 256),
+                    (attention_mask.shape[0], self.num_visual_tokens),
                     fill_value=True,
                     dtype=attention_mask.dtype,
                     device=attention_mask.device,
@@ -386,6 +429,17 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
 
             # Projection Logic =>> Update Attention Mask
             projected_patch_embeddings = self.projector(patch_features)
+
+            # [OpenVLA-OFT Extension] Project proprioceptive state and append as a single token after the patches
+            if self.use_proprio:
+                assert proprio is not None, "Missing `proprio` input for model with `use_proprio=True`!"
+                projected_proprio_embeddings = self.proprio_projector(
+                    proprio.to(dtype=projected_patch_embeddings.dtype)
+                )
+                projected_patch_embeddings = torch.cat(
+                    [projected_patch_embeddings, projected_proprio_embeddings], dim=1
+                )
+
             projected_patch_attention_mask = None
             if attention_mask is not None:
                 projected_patch_attention_mask = torch.full(
@@ -481,6 +535,7 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
         inputs_embeds: Optional[torch.FloatTensor] = None,
         pixel_values: Optional[torch.FloatTensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
+        proprio: Optional[torch.FloatTensor] = None,
         **kwargs: str,
     ) -> Dict[str, torch.Tensor]:
         """Borrowed from `LlamaForCausalLM` and simplified for batch size = 1; mirrors original PrismaticVLM logic."""
@@ -499,11 +554,12 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
         else:
             model_inputs = {"input_ids": input_ids}
 
-        # Make sure `pixel_values` are preserved in `model_inputs`
+        # Make sure `pixel_values` (and `proprio`, for OFT-style models) are preserved in `model_inputs`
         model_inputs.update(
             {
                 "attention_mask": attention_mask,
                 "pixel_values": pixel_values,
+                "proprio": proprio,
                 "past_key_values": past_key_values,
                 "use_cache": kwargs.get("use_cache"),
             }
@@ -727,8 +783,11 @@ class OpenVLAForActionPredictionWithValueHead(PrismaticForConditionalGeneration)
             attention_mask: torch.Tensor,
             pixel_values: torch.FloatTensor,
             labels: torch.LongTensor,
-            unnorm_key: str
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+            unnorm_key: str,
+            return_logits: bool = False,
+            proprio: Optional[torch.FloatTensor] = None,
+            detach_backbone_for_value: bool = False,
+    ):
         action_len = self.get_action_dim(unnorm_key)
 
         # check last token is `</s>`
@@ -742,6 +801,25 @@ class OpenVLAForActionPredictionWithValueHead(PrismaticForConditionalGeneration)
         # check input_ids and labels
         assert torch.allclose(input_ids, labels)
 
+        if detach_backbone_for_value:
+            with torch.no_grad():
+                outputs = super().forward(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    pixel_values=pixel_values,
+                    labels=labels,
+                    output_hidden_states=True,
+                    return_dict=True,
+                    proprio=proprio,
+                )
+                last_hidden_state = outputs.hidden_states[-1]
+                hidden_features = self._extract_action_hidden_features(last_hidden_state, action_len)
+            values = self.value_head(hidden_features)
+            zeros = values.new_zeros(values.shape[0], 1)
+            if return_logits:
+                return zeros, zeros, values, None
+            return zeros, zeros, values
+
         outputs = super().forward(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -749,6 +827,7 @@ class OpenVLAForActionPredictionWithValueHead(PrismaticForConditionalGeneration)
             labels=labels,
             output_hidden_states=True,  # output hidden_states
             return_dict=True,  # output dict
+            proprio=proprio,
         )
 
         last_hidden_state = outputs.hidden_states[-1]  # [B, L, hidden_dim]
@@ -777,6 +856,8 @@ class OpenVLAForActionPredictionWithValueHead(PrismaticForConditionalGeneration)
         entropy = -(probs_tensor * logprobs_tensor).sum(dim=-1)  # [B, action_len]
         entropy = entropy.mean(dim=-1, keepdim=True) # [B, 1]
 
+        if return_logits:
+            return logprobs, entropy, values, logits_tensor
         return logprobs, entropy, values
 
     def evaluate_action_with_q(
@@ -788,6 +869,7 @@ class OpenVLAForActionPredictionWithValueHead(PrismaticForConditionalGeneration)
             unnorm_key: str,
             use_target_q: bool = False,
             detach_backbone_for_q: Optional[bool] = None,
+            proprio: Optional[torch.FloatTensor] = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         action_len = self.get_action_dim(unnorm_key)
 
@@ -805,6 +887,7 @@ class OpenVLAForActionPredictionWithValueHead(PrismaticForConditionalGeneration)
             labels=labels,
             output_hidden_states=True,
             return_dict=True,
+            proprio=proprio,
         )
 
         last_hidden_state = outputs.hidden_states[-1]  # [B, L, hidden_dim]
@@ -835,6 +918,7 @@ class OpenVLAForActionPredictionWithValueHead(PrismaticForConditionalGeneration)
             input_ids: torch.LongTensor,
             attention_mask: torch.Tensor,
             pixel_values: torch.FloatTensor,
+            proprio: Optional[torch.FloatTensor] = None,
     ) -> torch.Tensor:
 
         assert self.vh_mode == "a0"
@@ -845,6 +929,7 @@ class OpenVLAForActionPredictionWithValueHead(PrismaticForConditionalGeneration)
             pixel_values=pixel_values,
             output_hidden_states=True,  # output hidden_states
             return_dict=True,  # output dict
+            proprio=proprio,
         )
 
         # check the last token is ` `
@@ -868,6 +953,7 @@ class OpenVLAForActionPredictionWithValueHead(PrismaticForConditionalGeneration)
             input_ids: torch.LongTensor,
             attention_mask: torch.Tensor,
             pixel_values: torch.FloatTensor,
+            proprio: Optional[torch.FloatTensor] = None,
     ) -> torch.Tensor:
         outputs = super().forward(
             input_ids=input_ids,
@@ -875,6 +961,7 @@ class OpenVLAForActionPredictionWithValueHead(PrismaticForConditionalGeneration)
             pixel_values=pixel_values,
             output_hidden_states=True,  # output hidden_states
             return_dict=True,  # output dict
+            proprio=proprio,
         )
 
         # check the last token is ` `
@@ -895,6 +982,7 @@ class OpenVLAForActionPredictionWithValueHead(PrismaticForConditionalGeneration)
             pixel_values: torch.FloatTensor,
             unnorm_key: str,
             do_sample: bool = True,
+            proprio: Optional[torch.FloatTensor] = None,
             **kwargs
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
 
@@ -913,6 +1001,7 @@ class OpenVLAForActionPredictionWithValueHead(PrismaticForConditionalGeneration)
             input_ids,
             attention_mask=attention_mask,
             pixel_values=pixel_values,
+            proprio=proprio,
             max_new_tokens=action_len,
             return_dict_in_generate=True,
             output_hidden_states=True,
@@ -979,3 +1068,15 @@ class OpenVLAForActionPredictionWithValueHead(PrismaticForConditionalGeneration)
         """Get all the logged statistics for the given dataset."""
         unnorm_key = self._check_unnorm_key(self.norm_stats, unnorm_key)
         return self.norm_stats[unnorm_key]["action"]
+
+
+class OpenVLAV2ForActionPrediction(OpenVLAForActionPrediction):
+    """OpenVLA_V2: OpenVLA + separate multi-camera images + proprioceptive state (OpenVLA-OFT style)."""
+
+    config_class: PretrainedConfig = OpenVLAV2Config
+
+
+class OpenVLAV2ForActionPredictionWithValueHead(OpenVLAForActionPredictionWithValueHead):
+    """OpenVLA_V2 variant with value (and optional Q) heads for PPO/RL fine-tuning."""
+
+    config_class: PretrainedConfig = OpenVLAV2Config

@@ -4,10 +4,12 @@ import random
 import gc
 import signal
 from collections import defaultdict
+from datetime import timedelta
 import time
 from pathlib import Path
 from typing import Annotated, Optional, List
 import torch
+import torch.distributed as dist
 from torch import nn
 import numpy as np
 import tyro
@@ -26,6 +28,65 @@ from simpler_env.utils.wandb_utils import init_wandb_with_online_fallback
 
 signal.signal(signal.SIGINT, signal.SIG_DFL)  # allow ctrl+c
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+
+def dist_rank() -> int:
+    if dist.is_available() and dist.is_initialized():
+        return dist.get_rank()
+    return 0
+
+
+def dist_world() -> int:
+    if dist.is_available() and dist.is_initialized():
+        return dist.get_world_size()
+    return 1
+
+
+def dist_is_main() -> bool:
+    return dist_rank() == 0
+
+
+def init_distributed() -> None:
+    if "RANK" not in os.environ:
+        return
+    if dist.is_initialized():
+        return
+    torch.cuda.set_device(0)
+    timeout_min = int(os.environ.get("REFKL_NCCL_TIMEOUT_MIN", "180"))
+    dist.init_process_group(backend="nccl", timeout=timedelta(minutes=timeout_min))
+    print(
+        f"DDP init rank={dist.get_rank()}/{dist.get_world_size()} "
+        f"cuda={torch.cuda.current_device()} visible={os.environ.get('CUDA_VISIBLE_DEVICES')}"
+    )
+
+
+def broadcast_trainable(params) -> None:
+    if dist_world() == 1:
+        return
+    for p in params:
+        dist.broadcast(p.data, src=0)
+
+
+def allreduce_grads(params) -> None:
+    if dist_world() == 1:
+        return
+    world = float(dist_world())
+    for p in params:
+        if p.grad is None:
+            p.grad = torch.zeros_like(p)
+        dist.all_reduce(p.grad, op=dist.ReduceOp.SUM)
+        p.grad.div_(world)
+
+
+def allreduce_mean_metrics(metrics: dict) -> dict:
+    if dist_world() == 1 or not dist.is_initialized():
+        return metrics
+    payload = {k: float(v) for k, v in metrics.items()}
+    gathered = [None] * dist_world()
+    dist.all_gather_object(gathered, payload)
+    keys = sorted(set(k for d in gathered for k in d))
+    world = float(dist_world())
+    return {k: sum(d.get(k, 0.0) for d in gathered) / world for k in keys}
 
 
 @dataclass
@@ -49,6 +110,7 @@ class Args:
     use_same_init: bool = False
     rollouts_per_update: int = 1
     use_default_task: bool = False
+    use_wrist_camera: bool = True
 
     steps_max: int = 2000000
     resume_from_episode: int = -1
@@ -424,7 +486,9 @@ class OpenVLAPPOBCTeacher:
         loss.backward()
 
         if idx % self.args.alg_gradient_accum == (self.args.alg_gradient_accum - 1) or idx == (total - 1):
-            grad_norm = nn.utils.clip_grad_norm_(self.policy.params_vla + self.policy.params_vh, self.ppo_grad_norm)
+            trainable = self.policy.params_vla + self.policy.params_vh
+            allreduce_grads(trainable)
+            grad_norm = nn.utils.clip_grad_norm_(trainable, self.ppo_grad_norm)
             self.policy.vh_optimizer.step()
             if not self.freeze_actor_updates:
                 self.policy.vla_optimizer.step()
@@ -476,7 +540,12 @@ class OpenVLAPPOBCTeacher:
 
         for _ in range(self.args.alg_ppo_epoch):
             data_generator = self._feed_forward_generator_with_teacher(buffer, teacher_actions)
-            for idx, batch in tqdm(enumerate(data_generator), total=minibatch_count, desc="train"):
+            for idx, batch in tqdm(
+                enumerate(data_generator),
+                total=minibatch_count,
+                desc="train",
+                disable=not dist_is_main(),
+            ):
                 info = self.train_ppo_step(idx, minibatch_count, batch)
                 if "grad_align_cosine" in info:
                     align_count += 1
@@ -515,24 +584,29 @@ class Runner:
         if self.args.bc_to_ref_enabled and not self.args.kl_to_ref_enabled:
             self.args.kl_to_ref_enabled = True
 
-        # set seed
-        np.random.seed(self.args.seed)
-        random.seed(self.args.seed)
+        # set seed (same torch seed on every rank so LoRA init matches before broadcast)
+        np.random.seed(self.args.seed + dist_rank())
+        random.seed(self.args.seed + dist_rank())
         torch.manual_seed(self.args.seed)
 
         # set wandb
-        init_wandb_with_online_fallback(
-            config=all_args.__dict__,
-            project="RLVLA",
-            name=self.args.name,
-            use_wandb=self.args.wandb,
-        )
-        self.save_dir = Path(wandb.run.dir)
-        self.glob_dir = Path(wandb.run.dir) / ".." / "glob"
-        self.glob_dir.mkdir(parents=True, exist_ok=True)
-
-        yaml.dump(all_args.__dict__, open(self.glob_dir / "config.yaml", "w"))
-        self._log_args()
+        if dist_is_main():
+            init_wandb_with_online_fallback(
+                config=all_args.__dict__,
+                project="RLVLA",
+                name=self.args.name,
+                use_wandb=self.args.wandb,
+            )
+            self.save_dir = Path(wandb.run.dir)
+            self.glob_dir = Path(wandb.run.dir) / ".." / "glob"
+            self.glob_dir.mkdir(parents=True, exist_ok=True)
+            yaml.dump(all_args.__dict__, open(self.glob_dir / "config.yaml", "w"))
+            self._log_args()
+        else:
+            self.save_dir = Path(f"/tmp/refkl_rank{dist_rank()}")
+            self.glob_dir = self.save_dir / "glob"
+            self.save_dir.mkdir(parents=True, exist_ok=True)
+            self.glob_dir.mkdir(parents=True, exist_ok=True)
 
         # policy
         from simpler_env.policies.openvla.openvla_train import OpenVLAPolicy
@@ -540,6 +614,12 @@ class Runner:
         device_id_other = 1 if torch.cuda.device_count() > 1 else 0
         self.device = torch.device("cuda:" + str(device_id))
         self.policy = OpenVLAPolicy(all_args, device_id_other)
+        if dist_world() > 1:
+            dist.barrier()
+            broadcast_trainable(self.policy.params_vla + self.policy.params_vh)
+            if dist_is_main():
+                print(f"DDP: one model, world_size={dist_world()}, broadcast LoRA+VH from rank 0", flush=True)
+            dist.barrier()
         self.alg = OpenVLAPPOBCTeacher(all_args, self.policy)
         self.teacher_key = self.args.kl_to_ref_unnorm_key or self.args.vla_unnorm_key
         self.student_key = self.args.vla_unnorm_key
@@ -568,7 +648,7 @@ class Runner:
 
         # env
         unnorm_state = self.policy.vla.get_action_stats(self.args.vla_unnorm_key)
-        self.env = SimlerWrapper(self.args, unnorm_state)
+        self.env = SimlerWrapper(self.args, unnorm_state, extra_seed=dist_rank() * 1_000_000)
 
         # buffer
         self.buffer = SeparatedReplayBuffer(
@@ -962,20 +1042,30 @@ class Runner:
         return env_stats_ret
 
     def run(self):
-        steps_per_episode = self.args.episode_len * self.args.rollouts_per_update * self.args.num_envs
+        local_steps_per_episode = self.args.episode_len * self.args.rollouts_per_update * self.args.num_envs
+        steps_per_episode = local_steps_per_episode * dist_world()
+        skip_ood_eval = self.args.env_id == "OpenReal2Sim-v0"
         start_steps = 0
         start_episode = 0
         if self.args.resume_from_episode >= 0:
             start_steps = (self.args.resume_from_episode + 1) * steps_per_episode
             start_episode = self.args.resume_from_episode + 1
-            print(
-                "Resume step offset enabled | "
-                f"resume_from_episode={self.args.resume_from_episode} | "
-                f"start_steps={start_steps}"
-            )
+            if dist_is_main():
+                print(
+                    "Resume step offset enabled | "
+                    f"resume_from_episode={self.args.resume_from_episode} | "
+                    f"start_steps={start_steps}"
+                )
         remaining_steps = max(0, self.args.steps_max - start_steps)
         max_episodes = remaining_steps // steps_per_episode
         train_start = time.time()
+        if dist_is_main():
+            print(
+                f"DDP run | world={dist_world()} | local_envs={self.args.num_envs} | "
+                f"local_steps/ep={local_steps_per_episode} | global_steps/ep={steps_per_episode} | "
+                f"max_episodes={max_episodes}",
+                flush=True,
+            )
 
         for episode in range(max_episodes):
             global_episode = start_episode + episode
@@ -994,7 +1084,11 @@ class Runner:
                 obs_warmup = obs_img.cpu().numpy() if self.args.store_rollouts_on_cpu else obs_img
                 self.buffer.warmup(obs_warmup, instruction, step_offset=step_offset)
 
-                for _ in tqdm(range(self.args.episode_len), desc="rollout"):
+                for _ in tqdm(
+                    range(self.args.episode_len),
+                    desc="rollout",
+                    disable=not dist_is_main(),
+                ):
                     value, action, logprob, teacher_action = self.collect(
                         need_teacher_action=need_teacher_actions
                     )
@@ -1012,11 +1106,12 @@ class Runner:
             # steps
             steps = start_steps + (episode + 1) * steps_per_episode
             env_metrics = {f"env/{k}": np.mean(v) for k, v in env_infos.items()}
-            print(self._format_env_metrics(env_metrics))
-            if prompts_seen:
-                print("Rollout prompts:")
-                for prompt in sorted(prompts_seen):
-                    print(f"- {prompt}")
+            if dist_is_main():
+                print(self._format_env_metrics(env_metrics))
+                if prompts_seen:
+                    print("Rollout prompts:")
+                    for prompt in sorted(prompts_seen):
+                        print(f"- {prompt}")
 
             # train and process infos
             self.compute_endup()
@@ -1026,80 +1121,110 @@ class Runner:
 
             # train
             self.alg.freeze_actor_updates = episode < self.args.freeze_actor_updates
-            if self.alg.freeze_actor_updates:
+            if self.alg.freeze_actor_updates and dist_is_main():
                 print(
                     "Actor updates: frozen "
                     f"({min(episode + 1, self.args.freeze_actor_updates)}/{self.args.freeze_actor_updates})"
                 )
             infos = self.train(steps)
             infos.update(env_metrics)
+            infos = allreduce_mean_metrics(infos)
+            if dist_world() > 1:
+                broadcast_trainable(self.policy.params_vla + self.policy.params_vh)
 
             # log
-            wandb.log(infos, step=steps)
+            if dist_is_main():
+                wandb.log(infos, step=steps)
 
             elapsed_time = time.time() - ep_time
             total_elapsed = time.time() - train_start
             remaining_steps = max(0, self.args.steps_max - steps)
             steps_per_sec = steps / total_elapsed if total_elapsed > 0 else 0.0
             eta = remaining_steps / steps_per_sec if steps_per_sec > 0 else 0.0
-            print("-" * 60)
-            print(
-                f"{self.args.name}: ep {global_episode:0>4d} | steps {steps} | "
-                f"e {elapsed_time:.2f}s | "
-                f"total {self._format_seconds(total_elapsed)} | "
-                f"eta {self._format_seconds(eta)}"
-            )
-            reward_mean = infos.get("buffer/reward_mean")
-            returns_mean = infos.get("returns_mean")
-            reward_text = f"{reward_mean:.6f}" if reward_mean is not None else "n/a"
-            returns_text = f"{returns_mean:.6f}" if returns_mean is not None else "n/a"
-            print(f"reward_mean={reward_text} | returns_mean={returns_text}")
+            if dist_is_main():
+                print("-" * 60)
+                print(
+                    f"{self.args.name}: ep {global_episode:0>4d} | steps {steps} | "
+                    f"e {elapsed_time:.2f}s | "
+                    f"total {self._format_seconds(total_elapsed)} | "
+                    f"eta {self._format_seconds(eta)}"
+                )
+                reward_mean = infos.get("buffer/reward_mean")
+                returns_mean = infos.get("train/returns_mean", infos.get("returns_mean"))
+                reward_text = f"{reward_mean:.6f}" if reward_mean is not None else "n/a"
+                returns_text = f"{returns_mean:.6f}" if returns_mean is not None else "n/a"
+                print(f"reward_mean={reward_text} | returns_mean={returns_text}")
 
-            # eval
-            if global_episode % self.args.interval_eval == self.args.interval_eval - 1 or episode == max_episodes - 1:
+            # eval / render: skip while DDP ranks wait — 64-env OpenReal2Sim
+            # eval+render exceeds the NCCL watchdog (~10 min) and kills the job.
+            ddp = dist_world() > 1
+            do_eval = global_episode % self.args.interval_eval == self.args.interval_eval - 1 or episode == max_episodes - 1
+            if do_eval and dist_is_main() and not ddp:
                 print(f"Evaluating at {steps}")
                 sval_stats = self.eval(obj_set="train")
                 sval_stats = {f"eval/{k}": v for k, v in sval_stats.items()}
                 wandb.log(sval_stats, step=steps)
 
-                sval_stats = self.eval(obj_set="test")
-                sval_stats = {f"eval/{k}_ood": v for k, v in sval_stats.items()}
-                wandb.log(sval_stats, step=steps)
+                if not skip_ood_eval:
+                    sval_stats = self.eval(obj_set="test")
+                    sval_stats = {f"eval/{k}_ood": v for k, v in sval_stats.items()}
+                    wandb.log(sval_stats, step=steps)
 
             # save
-            if global_episode % self.args.interval_save == self.args.interval_save - 1 or episode == max_episodes - 1:
+            do_save = global_episode % self.args.interval_save == self.args.interval_save - 1 or episode == max_episodes - 1
+            if do_save and dist_is_main():
                 print(f"Saving model at {steps}")
                 save_path = self.glob_dir / f"steps_{global_episode:0>4d}"
                 self.policy.save(save_path)
+                if not ddp:
+                    self.render(epoch=global_episode, obj_set="train")
+                    if not skip_ood_eval:
+                        self.render(epoch=global_episode, obj_set="test")
+                else:
+                    print(f"DDP: skipped eval/render after save {save_path}", flush=True)
 
-                self.render(epoch=global_episode, obj_set="train")
-                self.render(epoch=global_episode, obj_set="test")
+            if dist_world() > 1:
+                dist.barrier()
 
 
 def main():
+    init_distributed()
     args = tyro.cli(Args)
-    runner = Runner(args)
+    if dist_world() > 1:
+        stagger_s = int(os.environ.get("REFKL_LOAD_STAGGER_S", "20")) * dist_rank()
+        if stagger_s > 0:
+            print(f"rank {dist_rank()} waiting {stagger_s}s before model load", flush=True)
+            time.sleep(stagger_s)
+    try:
+        runner = Runner(args)
 
-    if args.only_render:
-        ll = [
-            "PutOnPlateInScene25VisionImage-v1",
-            "PutOnPlateInScene25VisionTexture03-v1",
-            "PutOnPlateInScene25VisionTexture05-v1",
-            "PutOnPlateInScene25VisionWhole03-v1",
-            "PutOnPlateInScene25VisionWhole05-v1",
+        if args.only_render:
+            if dist_is_main():
+                ll = [
+                    "PutOnPlateInScene25VisionImage-v1",
+                    "PutOnPlateInScene25VisionTexture03-v1",
+                    "PutOnPlateInScene25VisionTexture05-v1",
+                    "PutOnPlateInScene25VisionWhole03-v1",
+                    "PutOnPlateInScene25VisionWhole05-v1",
 
-            "PutOnPlateInScene25Instruct-v1",
-            "PutOnPlateInScene25Plate-v1",
-            "PutOnPlateInScene25Position-v1",
-            "PutOnPlateInScene25EEPose-v1",
-            "PutOnPlateInScene25PositionChange-v1",
-            "PutOnPlateInScene25PositionChangeTo-v1"
-        ]
-        if args.env_id not in ll:
-            runner.render(epoch=0, obj_set="train")
-        runner.render(epoch=0, obj_set="test")
-    else:
-        runner.run()
+                    "PutOnPlateInScene25Instruct-v1",
+                    "PutOnPlateInScene25Plate-v1",
+                    "PutOnPlateInScene25Position-v1",
+                    "PutOnPlateInScene25EEPose-v1",
+                    "PutOnPlateInScene25PositionChange-v1",
+                    "PutOnPlateInScene25PositionChangeTo-v1"
+                ]
+                if args.env_id not in ll:
+                    runner.render(epoch=0, obj_set="train")
+                runner.render(epoch=0, obj_set="test")
+        else:
+            runner.run()
+    finally:
+        if dist.is_available() and dist.is_initialized():
+            try:
+                dist.destroy_process_group()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

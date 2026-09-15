@@ -8,11 +8,11 @@ COMPOSE := DOCKER_BUILDKIT=$(DOCKER_BUILDKIT) COMPOSE_DOCKER_CLI_BUILD=$(COMPOSE
 CONTAINER := sim2real-simulation
 PYTHON := /opt/conda/bin/python
 
-KEY ?= airi_table_new_empty3_image
+KEY ?= airy_table_scene14sep26_left_image
 TASK ?= pick_up
 TASK_OBJECT ?=
 CONFIG ?= config/config_debug.yaml
-SCENE ?= assets/scenes/airi_table_new_empty3_image/simulation/scene.json
+SCENE ?= assets/scenes/$(KEY)/simulation/scene.json
 NPZ ?=
 OUT_CSV ?=
 OUT_YAML ?=
@@ -55,9 +55,9 @@ help: ## Показать доступные команды Make и основн
 	@printf "  make up\n"
 	@printf "  make planner\n"
 	@printf "  make planner TASK_OBJECT=yellow_cube_ext\n"
-	@printf "  make planner KEY=airi_table_new_empty3_image TASK=pick_up\n"
-	@printf "  make planner KEY=airi_table_new_empty3_image TASK=pick_up TASK_OBJECT=yellow_cube_ext\n"
-	@printf "  make planner KEY=airi_table_new_empty3_image TASK=pick_up SCENE=assets/scenes/airi_table_new_empty3_image/simulation/scene.json\n"
+	@printf "  make planner KEY=airy_table_scene14sep26_left_image TASK=pick_up\n"
+	@printf "  make planner KEY=airy_table_scene14sep26_left_image TASK=pick_up TASK_OBJECT=yellow_cube_ext\n"
+	@printf "  make planner KEY=airy_table_scene14sep26_left_image TASK=pick_up SCENE=assets/scenes/airy_table_scene14sep26_left_image/simulation/scene.json\n"
 	@printf "  make test\n"
 	@printf "  make stats NPZ=/app/runs/manual/<run>/rl4vla_raw_episode_success.npz\n"
 	@printf "  make csv NPZ=/app/runs/manual/<run>/rl4vla_raw_episode_success.npz\n"

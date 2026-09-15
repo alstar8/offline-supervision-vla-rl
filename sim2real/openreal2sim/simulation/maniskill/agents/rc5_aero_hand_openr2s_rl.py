@@ -5,7 +5,7 @@ from mani_skill.agents.registration import register_agent
 
 from .legacy_pd_ee_pose import LegacyAlignPDEEPoseControllerConfig
 from .rc5_aero_hand_openr2s import RC5AeroHandOpenR2S
-from .rc5_hand_adapter import RCPresetHandControllerConfig
+from .rc5_hand_adapter import RCLevelHandControllerConfig
 
 
 @register_agent()
@@ -14,7 +14,8 @@ class RC5AeroHandOpenR2S_RL(RC5AeroHandOpenR2S):
 
     Action layout matches WidowX RL mode:
     [dx, dy, dz, droll, dpitch, dyaw, gripper]
-    where the last scalar is mapped to open/close hand presets.
+    where the last scalar is an absolute hand-openness level in [0, 1]
+    (1 = fully open, 0 = fully closed), quantized to 0.2 steps by the pipeline.
     """
 
     uid = 'rc5_aero_hand_openr2s_rl'
@@ -58,7 +59,7 @@ class RC5AeroHandOpenR2S_RL(RC5AeroHandOpenR2S):
             diagnostic_arm_delta_norm_threshold_rad=0.75,
             raise_on_ik_failure=False,
         )
-        hand_controller = RCPresetHandControllerConfig(
+        hand_controller = RCLevelHandControllerConfig(
             joint_names=self.hand_joint_names,
             open_qpos=self.hand_open_qpos,
             close_qpos=self.hand_close_qpos,

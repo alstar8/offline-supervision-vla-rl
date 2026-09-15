@@ -12,8 +12,12 @@ from torch.optim import AdamW
 from peft import LoraConfig, get_peft_model, PeftModel
 from peft.tuners.lora import LoraLayer
 from tqdm import tqdm
-from transformers import AutoTokenizer, BatchFeature
-from prismatic.extern.hf.modeling_prismatic import OpenVLAForActionPredictionWithValueHead
+from transformers import AutoConfig, AutoTokenizer, BatchFeature
+from prismatic.extern.hf.configuration_prismatic import OpenVLAV2Config
+from prismatic.extern.hf.modeling_prismatic import (
+    OpenVLAForActionPredictionWithValueHead,
+    OpenVLAV2ForActionPredictionWithValueHead,
+)
 from prismatic.extern.hf.processing_prismatic import PrismaticImageProcessor, PrismaticProcessor
 from simpler_env.utils.discrete_kl_utils import (
     build_action_edges_from_stats,
@@ -24,6 +28,17 @@ def huber_loss(e, d):
     a = (abs(e) <= d).to(torch.float32)
     b = (abs(e) > d).to(torch.float32)
     return a * e ** 2 / 2 + b * d * (abs(e) - d / 2)
+
+
+def _materialize_meta_leaves(module: nn.Module) -> None:
+    """Move randomly-initialized V2 modules (e.g. proprio_projector) off the meta device."""
+    for child in module.children():
+        _materialize_meta_leaves(child)
+    direct_params = list(module.parameters(recurse=False))
+    if direct_params and any(p.is_meta for p in direct_params):
+        module.to_empty(device="cpu")
+        if hasattr(module, "reset_parameters"):
+            module.reset_parameters()
 
 
 class OpenVLAPolicy:
@@ -38,6 +53,8 @@ class OpenVLAPolicy:
         self.q_enabled = bool(getattr(self.args, "q_enabled", False))
         self.q_target_enabled = bool(getattr(self.args, "q_target_enabled", False)) and self.q_enabled
         self.q_detach_backbone = bool(getattr(self.args, "q_detach_backbone", True))
+        self.vla_model_variant = str(getattr(self.args, "vla_model_variant", "v1"))
+        self.vla_proprio_dim = int(getattr(self.args, "vla_proprio_dim", 7))
         os.environ.setdefault("HF_HUB_RESUME_DOWNLOAD", "1")
 
         # openvla: register
@@ -95,6 +112,13 @@ class OpenVLAPolicy:
                 path = Path(self.args.vla_load_path) / "dataset_statistics.json"
                 ds = json.load(open(path, "r"))
                 self.vla.base_model.norm_stats[self.args.vla_unnorm_key] = ds[self.args.vla_unnorm_key]
+            if self.vla_model_variant == "v2":
+                stats = self.vla.base_model.norm_stats.get(self.args.vla_unnorm_key, {})
+                if "proprio" not in stats:
+                    raise ValueError(
+                        f"OpenVLA_V2 requires proprio q99 stats under unnorm key "
+                        f"'{self.args.vla_unnorm_key}' in {self.args.vla_load_path}/dataset_statistics.json."
+                    )
 
         # set value head trainable
         for name, param in self.vla.named_parameters():
@@ -105,21 +129,29 @@ class OpenVLAPolicy:
 
         self.student_adapter_name = self._get_active_adapter_name()
 
-        if self.args.kl_to_ref_enabled:
+        need_teacher = bool(self.args.kl_to_ref_enabled) or (
+            bool(getattr(self.args, "bc_to_ref_enabled", False)) and bool(self.args.kl_to_ref_path)
+        )
+        if need_teacher:
             if not self.args.kl_to_ref_path:
-                raise ValueError("kl_to_ref_enabled requires --kl_to_ref_path to be set.")
+                raise ValueError("RefKL / BC-to-ref requires --kl_to_ref_path to be set.")
             self._load_teacher_adapter(self.args.kl_to_ref_path)
+            if self.args.vla_unnorm_key not in self.vla.base_model.norm_stats:
+                stats_path = Path(self.args.kl_to_ref_path) / "dataset_statistics.json"
+                if stats_path.exists():
+                    ds = json.load(open(stats_path, "r"))
+                    if self.args.vla_unnorm_key in ds:
+                        self.vla.base_model.norm_stats[self.args.vla_unnorm_key] = ds[self.args.vla_unnorm_key]
             print(
-                "Teacher adapter loaded (kl_to_ref_enabled) | "
+                "Teacher adapter loaded | "
                 f"teacher_path={self.args.kl_to_ref_path} | "
                 f"student_key={self.args.vla_unnorm_key} | "
                 f"teacher_key={self.args.kl_to_ref_unnorm_key} | "
-                f"steps={self.args.kl_to_ref_steps} | "
-                f"coef={self.args.kl_to_ref_coef} | "
-                "note=KL loss is applied only in trainer codepaths that implement KL-to-ref."
+                f"kl_to_ref_enabled={self.args.kl_to_ref_enabled} | "
+                f"bc_to_ref_enabled={getattr(self.args, 'bc_to_ref_enabled', False)}"
             )
         else:
-            print("Teacher adapter disabled (kl_to_ref_enabled=False).")
+            print("Teacher adapter disabled (kl_to_ref_enabled=False, no bc teacher path).")
 
         # ensure student trainable, teacher frozen
         self._set_trainability(student_trainable=True)
@@ -194,6 +226,32 @@ class OpenVLAPolicy:
                 )
                 self.q_enabled = False
                 self.q_target_enabled = False
+        if self.vla_model_variant == "v2":
+            v2_kwargs = dict(base_kwargs)
+            v2_kwargs.pop("device_map", None)
+            v2_kwargs.pop("max_memory", None)
+            base_config = AutoConfig.from_pretrained(self.args.vla_path, trust_remote_code=True)
+            config_dict = base_config.to_dict()
+            config_dict.pop("model_type", None)
+            v2_config = OpenVLAV2Config(
+                **config_dict,
+                use_proprio=True,
+                proprio_dim=self.vla_proprio_dim,
+                num_images_in_input=2,
+            )
+            vla = OpenVLAV2ForActionPredictionWithValueHead.from_pretrained(
+                self.args.vla_path,
+                config=v2_config,
+                **v2_kwargs,
+            )
+            _materialize_meta_leaves(vla)
+            device = torch.device("cuda:" + str(self.device_id))
+            print(
+                f"Loaded OpenVLA_V2 | proprio_dim={self.vla_proprio_dim} | "
+                f"num_images_in_input=2 | device={device}",
+                flush=True,
+            )
+            return vla.to(device)
         return OpenVLAForActionPredictionWithValueHead.from_pretrained(
             self.args.vla_path,
             **base_kwargs,
@@ -342,6 +400,7 @@ class OpenVLAPolicy:
             labels=features["labels"],
             output_hidden_states=False,
             return_dict=True,
+            proprio=features.get("proprio"),
         )
         logits_tensor = outputs.logits[:, -action_len - 2 : -2]
         logits_tensor = logits_tensor[:, :, 32000 - 256 : 32000]
@@ -382,6 +441,28 @@ class OpenVLAPolicy:
             dtype=torch.float32,
         )
 
+    def _normalize_proprio(self, proprio: torch.Tensor) -> torch.Tensor:
+        """Bounds-q99 normalization, mirroring `normalize_action_and_proprio` in the RLDS pipeline."""
+        stats = self.vla.base_model.norm_stats[self.args.vla_unnorm_key]["proprio"]
+        device = self.tpdv["device"]
+        x = proprio.to(device=device, dtype=torch.float32)
+        low = torch.as_tensor(np.asarray(stats["q01"]), device=device, dtype=torch.float32)
+        high = torch.as_tensor(np.asarray(stats["q99"]), device=device, dtype=torch.float32)
+        mask = torch.as_tensor(
+            np.asarray(stats.get("mask", np.ones_like(np.asarray(stats["q01"]), dtype=bool))),
+            device=device,
+            dtype=torch.bool,
+        )
+        normalized = torch.where(
+            mask,
+            torch.clamp(2.0 * (x - low) / (high - low + 1e-8) - 1.0, -1.0, 1.0),
+            x,
+        )
+        zeros_mask = torch.as_tensor(
+            np.asarray(stats["min"]) == np.asarray(stats["max"]), device=device, dtype=torch.bool
+        )
+        return torch.where(zeros_mask, torch.zeros_like(normalized), normalized)
+
     def _preprocess_obs(self, x: dict, action: torch.Tensor = None) -> BatchFeature:
         images = x["image"]
         task_description = x["task_description"]
@@ -395,8 +476,18 @@ class OpenVLAPolicy:
         assert isinstance(task_description[0], str)
         assert images.shape[0] == len(task_description)
 
-        images = images.permute(0, 3, 1, 2)  # [B, C, H, W]
-        images = images.to(**self.tpdv)
+        if self.vla_model_variant == "v2":
+            images_wrist = x["image_wrist"]
+            assert isinstance(images_wrist, torch.Tensor)
+            assert images_wrist.shape[0] == images.shape[0]
+            proc_images = [
+                images.permute(0, 3, 1, 2).to(**self.tpdv),
+                images_wrist.permute(0, 3, 1, 2).to(**self.tpdv),
+            ]
+        else:
+            images = images.permute(0, 3, 1, 2)  # [B, C, H, W]
+            images = images.to(**self.tpdv)
+            proc_images = images
 
         # prompt
         if action is None:
@@ -410,16 +501,20 @@ class OpenVLAPolicy:
             task_prompt = [f"In: What action should the robot take to {t.lower()}?\nOut: {a}</s>"
                            for t, a in zip(task_description, action_str)]
 
-        inputs = self.processor(task_prompt, images, padding=True)
+        inputs = self.processor(task_prompt, proc_images, padding=True)
         inputs = inputs.to(**self.tpdv)
+
+        if self.vla_model_variant == "v2":
+            inputs["proprio"] = self._normalize_proprio(x["proprio"])
 
         if action is not None:
             inputs["labels"] = inputs["input_ids"].clone()
 
         return inputs
 
-    def get_action(self, x: dict, deterministic) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        temperature = self.args.vla_temperature_eval if deterministic else self.args.vla_temperature
+    def get_action(self, x: dict, deterministic, temperature: Optional[float] = None) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if temperature is None:
+            temperature = self.args.vla_temperature_eval if deterministic else self.args.vla_temperature
         # deterministic=True => greedy decode; deterministic=False => sample using selected temperature.
         do_sample = not deterministic
         effective_temperature = temperature if do_sample else 1.0
@@ -470,18 +565,33 @@ class OpenVLAPolicy:
 
         return hs
 
-    def evaluate_actions(self, x: dict, action: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def evaluate_actions(
+        self,
+        x: dict,
+        action: torch.Tensor,
+        return_logits: bool = False,
+        detach_backbone_for_value: bool = False,
+    ):
         features = self._preprocess_obs(x, action)
 
-        logprobs, entropy, values = self.vla.evaluate_action(
+        result = self.vla.evaluate_action(
             **features,
-            unnorm_key=self.args.vla_unnorm_key
+            unnorm_key=self.args.vla_unnorm_key,
+            return_logits=return_logits,
+            detach_backbone_for_value=detach_backbone_for_value,
         )
+        if return_logits:
+            logprobs, entropy, values, logits = result
+        else:
+            logprobs, entropy, values = result
+            logits = None
 
         assert len(logprobs.shape) == 2 and logprobs.shape[1] == 1
         assert len(entropy.shape) == 2 and entropy.shape[1] == 1
         assert len(values.shape) == 2 and values.shape[1] == 1
 
+        if return_logits:
+            return logprobs, entropy, values, logits
         return logprobs, entropy, values
 
     def evaluate_actions_with_q(
@@ -631,10 +741,17 @@ class OpenVLAPPO:
         return torch.log(torch.clamp(probs, min=eps))
 
     def train_ppo_step(self, idx, total, batch):
-        obs_image, instruct, actions, value_preds, returns, masks, old_logprob, advantages = batch
+        if len(batch) == 10:
+            obs_image, obs_wrist, proprio, instruct, actions, value_preds, returns, masks, old_logprob, advantages = batch
+        else:
+            obs_image, instruct, actions, value_preds, returns, masks, old_logprob, advantages = batch
+            obs_wrist, proprio = None, None
 
         obs_image = self._as_tensor(obs_image, self.tpdv["device"])
         obs = dict(image=obs_image, task_description=instruct)  # uint8
+        if obs_wrist is not None:
+            obs["image_wrist"] = self._as_tensor(obs_wrist, self.tpdv["device"])
+            obs["proprio"] = self._as_tensor(proprio, self.tpdv["device"], dtype=torch.float32)
         actions = self._as_tensor(actions, self.tpdv["device"], dtype=torch.int32)
         value_preds = self._as_tensor(value_preds, self.tpdv["device"], dtype=self.tpdv["dtype"])
         returns = self._as_tensor(returns, self.tpdv_vn["device"], dtype=self.tpdv_vn["dtype"])  # float32
@@ -744,10 +861,17 @@ class OpenVLAPPO:
         return info
 
     def train_grpo_step(self, idx, total, batch):
-        obs_image, instruct, actions, value_preds, returns, masks, old_logprob, advantages = batch
+        if len(batch) == 10:
+            obs_image, obs_wrist, proprio, instruct, actions, value_preds, returns, masks, old_logprob, advantages = batch
+        else:
+            obs_image, instruct, actions, value_preds, returns, masks, old_logprob, advantages = batch
+            obs_wrist, proprio = None, None
 
         obs_image = self._as_tensor(obs_image, self.tpdv["device"])
         obs = dict(image=obs_image, task_description=instruct)  # uint8
+        if obs_wrist is not None:
+            obs["image_wrist"] = self._as_tensor(obs_wrist, self.tpdv["device"])
+            obs["proprio"] = self._as_tensor(proprio, self.tpdv["device"], dtype=torch.float32)
         actions = self._as_tensor(actions, self.tpdv["device"], dtype=torch.int32)
         # value_preds = torch.tensor(value_preds).to(**self.tpdv)
         # returns = torch.tensor(returns).to(**self.tpdv_vn) # float32

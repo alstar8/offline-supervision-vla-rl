@@ -190,7 +190,7 @@ class PrismaticProcessor(ProcessorMixin):
     def __call__(
             self,
             text: Union[TextInput, PreTokenizedInput, List[TextInput], List[PreTokenizedInput]],
-            images: torch.Tensor,
+            images: Union[torch.Tensor, List[torch.Tensor], Tuple[torch.Tensor, ...]],
             padding: Union[bool, str, PaddingStrategy] = False,
             truncation: Optional[Union[bool, str, TruncationStrategy]] = None,
             max_length: Optional[int] = None,
@@ -200,7 +200,8 @@ class PrismaticProcessor(ProcessorMixin):
         Preprocess a given (batch) of text/images for a Prismatic VLM; forwards text to the underlying LLM's tokenizer,
         forwards images to PrismaticImageProcessor.
         @param text: The (batch) of text to encode; must be a string or list of strings.
-        @param images: torch.Tensor [B, C, H, W].
+        @param images: torch.Tensor [B, C, H, W], or a list/tuple of such tensors (one per camera) for
+                       multi-image models; in that case `pixel_values` is [B, n_images, C, H, W].
         @param padding: Sequence padding strategy (if multiple specified) in < True = "longest" | "max_length" | False >
         @param truncation: Truncation strategy for the output sequences; requires `max_length` to be specified
         @param max_length: Maximum length (in tokens) to truncate
@@ -209,7 +210,13 @@ class PrismaticProcessor(ProcessorMixin):
         """
         assert self.tokenizer.padding_side == "left", "Required: Init tokenizer with padding_side='left'"
 
-        pixel_values = self.image_processor(images, return_tensors=return_tensors)["pixel_values"]
+        if isinstance(images, (list, tuple)):
+            pixel_values = torch.stack(
+                [self.image_processor(img, return_tensors=return_tensors)["pixel_values"] for img in images],
+                dim=1,
+            )
+        else:
+            pixel_values = self.image_processor(images, return_tensors=return_tensors)["pixel_values"]
         text_inputs = self.tokenizer(
             text, return_tensors=return_tensors, padding=padding, truncation=truncation, max_length=max_length
         )

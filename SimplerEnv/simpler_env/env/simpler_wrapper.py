@@ -1,5 +1,6 @@
 import gymnasium as gym
 import json
+import os
 import sys
 import numpy as np
 from pathlib import Path
@@ -58,6 +59,19 @@ def _is_openreal2sim_env(env_id: str) -> bool:
     return env_id in OPENREAL2SIM_ENV_IDS
 
 
+def _sim_backend() -> str:
+    # GPU 3 PhysX CUDA hangs on this box; eval_sim.sh can set cpu.
+    return os.environ.get("OPENREAL2SIM_SIM_BACKEND", "gpu")
+
+
+def _obs_mode_for_env(env_id: str) -> str:
+    # OpenVLA consumes RGB only. Segmentation textures double GPU camera buffers
+    # and can fail with "cannot create buffer" after the 7B VLA is loaded.
+    if _is_openreal2sim_env(env_id):
+        return "rgb"
+    return "rgb+segmentation"
+
+
 def _control_mode_for_env(env_id: str) -> str:
     if _is_openreal2sim_env(env_id):
         return RC5_TARGET_DELTA_CONTROL_MODE
@@ -81,6 +95,189 @@ def _openreal2sim_rl_gym_kwargs(*, use_wrist_camera: bool) -> dict:
     return build_openreal2sim_rl_gym_kwargs(use_wrist_camera=use_wrist_camera)
 
 
+def _as_float_col(value, device) -> torch.Tensor:
+    if torch.is_tensor(value):
+        tensor = value.to(device=device, dtype=torch.float32)
+    else:
+        tensor = torch.as_tensor(value, device=device, dtype=torch.float32)
+    return tensor.reshape(-1, 1)
+
+
+def _clip_ee_delta(action: torch.Tensor, max_ee_delta: float) -> torch.Tensor:
+    limit = float(max_ee_delta)
+    if limit <= 0.0:
+        return action
+    return torch.cat([action[:, :3].clamp(-limit, limit), action[:, 3:]], dim=1)
+
+
+def _effective_yeet_coef(args, step) -> float:
+    coef = float(getattr(args, "reward_yeet_coef", 0.0) or 0.0)
+    warmup = int(getattr(args, "reward_yeet_warmup_steps", 0) or 0)
+    if coef > 0.0 and warmup > 0 and step is not None:
+        coef = coef * min(1.0, max(0.0, float(step) / float(warmup)))
+    return coef
+
+
+def _shaped_grasp_reward(info, reward_old, args, step=None):
+    device = info["success"].device
+    grasped = info.get("instant_is_src_obj_grasped", info["is_src_obj_grasped"])
+    consecutive = info.get("instant_consecutive_grasp", info["consecutive_grasp"])
+    success = _as_float_col(info["success"], device)
+    grasped = _as_float_col(grasped, device)
+    consecutive = _as_float_col(consecutive, device)
+
+    height_t = None
+    height = info.get("obj_height_above_table")
+    if height is not None:
+        height_t = _as_float_col(height, device)
+
+    max_lift = float(getattr(args, "reward_max_lift_height", 0.0) or 0.0)
+    if height_t is not None and max_lift > 0.0:
+        success = success * (height_t <= max_lift).to(dtype=torch.float32)
+
+    reward_old = reward_old.to(device=device, dtype=torch.float32).reshape(-1, 1)
+    reward = grasped * 0.1 + consecutive * 0.1 + success * 1.0
+
+    lift_coef = float(getattr(args, "reward_lift_coef", 0.0) or 0.0)
+    lift_ref = float(getattr(args, "reward_lift_height", 0.05) or 0.05)
+    if lift_coef > 0.0 and height_t is not None:
+        progress = (height_t / max(lift_ref, 1e-6)).clamp(0.0, 1.0)
+        reward = reward + lift_coef * grasped * progress
+
+    yeet_h = float(getattr(args, "reward_yeet_height", 0.0) or 0.0)
+    yeet_coef = _effective_yeet_coef(args, step)
+    if yeet_coef > 0.0 and yeet_h > 0.0 and height_t is not None:
+        over = (height_t - yeet_h).clamp(min=0.0)
+        if bool(getattr(args, "reward_yeet_grasp_only", False)):
+            over = over * grasped
+        reward = reward - yeet_coef * over
+
+    reach_coef = float(getattr(args, "reward_reach_coef", 0.0) or 0.0)
+    if reach_coef > 0.0 and "gripper_obj_dist" in info:
+        reach_clip = float(getattr(args, "reward_reach_clip", 0.4) or 0.4)
+        dist = _as_float_col(info["gripper_obj_dist"], device).clamp(max=reach_clip)
+        reward = reward - reach_coef * dist
+
+    reward_diff = reward - reward_old
+    return reward_diff, reward
+
+
+class GraspHoldAssist:
+    """Force-close after first close, and absorb after K consecutive successes."""
+
+    def __init__(self, args, num_envs: int):
+        self.args = args
+        self.num_envs = int(num_envs)
+        self.sticky_steps = int(getattr(args, "sticky_gripper_steps", 0) or 0)
+        self.terminate_steps = int(getattr(args, "success_terminate_steps", 0) or 0)
+        self._closed_once = None
+        self._sticky_left = None
+        self._absorbed = None
+        self._streak = None
+        self._latched_success = None
+
+    def reset(self, device):
+        n = self.num_envs
+        self._closed_once = torch.zeros(n, dtype=torch.bool, device=device)
+        self._sticky_left = torch.zeros(n, dtype=torch.int32, device=device)
+        self._absorbed = torch.zeros(n, dtype=torch.bool, device=device)
+        self._streak = torch.zeros(n, dtype=torch.int32, device=device)
+        self._latched_success = torch.zeros(n, dtype=torch.bool, device=device)
+
+    def before_physics(self, action: torch.Tensor) -> torch.Tensor:
+        if self._absorbed is None:
+            self.reset(action.device)
+        action = action.clone()
+        if self._absorbed.any():
+            action[self._absorbed, :6] = 0.0
+            action[self._absorbed, 6] = 0.0  # openness 0.0 = fully closed
+        if self.sticky_steps == 0:
+            return action
+        closed = action[:, 6] < 0.5  # openness below halfway counts as a close command
+        if self.sticky_steps < 0:
+            self._closed_once = self._closed_once | closed
+            if self._closed_once.any():
+                action[self._closed_once, 6] = 0.0
+            return action
+        refresh = torch.full_like(self._sticky_left, int(self.sticky_steps))
+        self._sticky_left = torch.where(closed, refresh, self._sticky_left)
+        force = self._sticky_left > 0
+        if force.any():
+            action[force, 6] = 0.0
+        self._sticky_left = torch.clamp(self._sticky_left - 1, min=0)
+        return action
+
+    def after_physics(self, info, reward):
+        if self.terminate_steps <= 0 or self._absorbed is None:
+            extra = torch.zeros(reward.shape[0], 1, device=reward.device, dtype=torch.bool)
+            return reward, extra
+        success = info["success"].reshape(-1).to(device=reward.device)
+        if success.dtype != torch.bool:
+            success = success > 0.5
+        was_absorbed = self._absorbed
+        self._streak = torch.where(success, self._streak + 1, torch.zeros_like(self._streak))
+        self._absorbed = self._absorbed | (self._streak >= int(self.terminate_steps))
+        self._latched_success = self._latched_success | self._absorbed
+        reward = torch.where(was_absorbed.reshape(-1, 1), torch.zeros_like(reward), reward)
+        extra = self._absorbed.reshape(-1, 1)
+        return reward, extra
+
+    def override_episode_success(self, values):
+        if self.terminate_steps <= 0 or self._latched_success is None:
+            return values
+        out = []
+        for i, value in enumerate(values):
+            latched = bool(self._latched_success[i].item()) if i < int(self._latched_success.numel()) else False
+            out.append(bool(value) or latched)
+        return out
+
+
+def _reward_shaping_log_line(args) -> str:
+    return (
+        "Reward shaping | "
+        f"reach_coef={float(getattr(args, 'reward_reach_coef', 0.0) or 0.0)} | "
+        f"reach_clip={float(getattr(args, 'reward_reach_clip', 0.4) or 0.4)} | "
+        f"max_lift={float(getattr(args, 'reward_max_lift_height', 0.0) or 0.0)} | "
+        f"lift_coef={float(getattr(args, 'reward_lift_coef', 0.0) or 0.0)} | "
+        f"yeet_h={float(getattr(args, 'reward_yeet_height', 0.0) or 0.0)} | "
+        f"yeet_coef={float(getattr(args, 'reward_yeet_coef', 0.0) or 0.0)} | "
+        f"yeet_grasp_only={bool(getattr(args, 'reward_yeet_grasp_only', False))} | "
+        f"yeet_warmup={int(getattr(args, 'reward_yeet_warmup_steps', 0) or 0)} | "
+        f"max_ee_delta={float(getattr(args, 'max_ee_delta', 0.0) or 0.0)} | "
+        f"sticky_gripper={int(getattr(args, 'sticky_gripper_steps', 0) or 0)} | "
+        f"success_terminate={int(getattr(args, 'success_terminate_steps', 0) or 0)}"
+    )
+
+
+def _fill_episode_info(info, truncated, hold_assist: GraspHoldAssist):
+    if not truncated.any():
+        return
+    info["episode"] = {}
+    n = int(truncated.shape[0])
+    for key in [
+        "is_src_obj_grasped",
+        "consecutive_grasp",
+        "success",
+        "instant_is_src_obj_grasped",
+        "instant_consecutive_grasp",
+    ]:
+        if key not in info:
+            continue
+        values = [info[key][idx].item() for idx in range(n)]
+        if key == "success":
+            values = hold_assist.override_episode_success(values)
+        info["episode"][key] = values
+
+
+def _quantize_gripper_openness(gripper: torch.Tensor) -> torch.Tensor:
+    """Snap a continuous openness command to the discrete levels {0.0, 0.2, ..., 1.0}.
+
+    Convention: 1.0 = fully open, 0.0 = fully closed (matches the env's
+    RCLevelHandController and the Bridge open_gripper convention used in SFT data).
+    """
+    return (gripper.to(torch.float32) * 5.0).round().clamp(0.0, 5.0) / 5.0
+
+
 def _unnormalize_continuous_action(raw_actions: torch.Tensor, unnorm_state, action_scale: float = 1.0) -> torch.Tensor:
     normalized_actions = raw_actions.to(torch.float32)
 
@@ -97,7 +294,7 @@ def _unnormalize_continuous_action(raw_actions: torch.Tensor, unnorm_state, acti
 
     world_vector = raw_action[:, :3] * action_scale
     rot_axangle = raw_action[:, 3:6]
-    gripper = 2.0 * (raw_action[:, 6:7] > 0.5).to(torch.float32) - 1.0
+    gripper = _quantize_gripper_openness(raw_action[:, 6:7])
     return torch.cat([world_vector, rot_axangle, gripper], dim=1)
 
 
@@ -231,11 +428,28 @@ def _openvla_obs_image(obs: dict, *, wrist_inset_bottom_right: bool = False) -> 
     return _compose_wrist_inset(scene_rgb, wrist_rgb, bottom_right=wrist_inset_bottom_right)
 
 
+def _openvla_scene_wrist_images(obs: dict) -> tuple[torch.Tensor, torch.Tensor]:
+    """OpenVLA_V2: return (scene_rgb, wrist_rgb) as separate uint8 [B, H, W, 3] tensors."""
+    sensor_data = obs["sensor_data"]
+    if "3rd_view_camera" in sensor_data and "rgb" in sensor_data["3rd_view_camera"]:
+        scene_rgb = sensor_data["3rd_view_camera"]["rgb"]
+    elif "base_camera" in sensor_data and "rgb" in sensor_data["base_camera"]:
+        scene_rgb = sensor_data["base_camera"]["rgb"]
+    else:
+        available = list(sensor_data.keys()) if isinstance(sensor_data, dict) else type(sensor_data)
+        raise KeyError(f"No scene RGB camera found in sensor_data keys={available}")
+    wrist_data = sensor_data.get(WRIST_CAMERA_NAME)
+    if wrist_data is None or "rgb" not in wrist_data:
+        raise KeyError(f"No wrist camera RGB found in sensor_data keys={list(sensor_data.keys())}")
+    return scene_rgb.to(torch.uint8), wrist_data["rgb"].to(torch.uint8)
+
+
 class SimlerWrapper:
     def __init__(self, all_args, unnorm_state, extra_seed=0):
         self.args = all_args
         self.unnorm_state = unnorm_state
         self._real2sim_robot_state = None
+        self._vla_model_variant = str(getattr(self.args, "vla_model_variant", "v1"))
 
         self.num_envs = self.args.num_envs
         robot_control_mode = _control_mode_for_env(self.args.env_id)
@@ -248,9 +462,9 @@ class SimlerWrapper:
         env_config = dict(
             id=self.args.env_id,
             num_envs=self.args.num_envs,
-            obs_mode="rgb+segmentation",
+            obs_mode=_obs_mode_for_env(self.args.env_id),
             control_mode=robot_control_mode,
-            sim_backend="gpu",
+            sim_backend=_sim_backend(),
             enable_shadow=True,
             sim_config={
                 "sim_freq": DEFAULT_REAL2SIM_SIM_FREQ,
@@ -262,16 +476,20 @@ class SimlerWrapper:
         )
         if _is_openreal2sim_env(self.args.env_id):
             env_config.update(_openreal2sim_rl_gym_kwargs(use_wrist_camera=bool(self.args.use_wrist_camera)))
+            env_config["obs_mode"] = _obs_mode_for_env(self.args.env_id)
         self.env: BaseEnv = gym.make(**env_config)
         self.env.reset(seed=[self.args.seed * 1000 + i + extra_seed for i in range(self.args.num_envs)])
         self._reset_counter = 0
 
         # variables
         self.reward_old = torch.zeros(self.args.num_envs, 1, dtype=torch.float32)  # [B, 1]
+        self.hold_assist = GraspHoldAssist(self.args, self.num_envs)
+        self._shaping_step = 0
 
         # constants
         bins = np.linspace(-1, 1, 256)
         self.bin_centers = (bins[:-1] + bins[1:]) / 2.0
+        print(_reward_shaping_log_line(self.args))
         self._setup_eval_debug()
 
     def _setup_eval_debug(self):
@@ -330,17 +548,42 @@ class SimlerWrapper:
             raise ValueError("obs_img is required when camera_name is empty.")
         return obs_img.detach().cpu().numpy()
 
+    def set_shaping_step(self, step: int):
+        self._shaping_step = int(step)
+
+    def _get_proprio_7d(self) -> torch.Tensor:
+        """7D proprio for OpenVLA_V2: 6 arm joint positions + gripper-closure scalar in [0, 1].
+
+        The closure scalar is the mean over the 16 Aero Hand joints of qpos / hand_close_qpos
+        (hand_open_qpos is all zeros), clipped to [0, 1]; 0 = fully open, 1 = fully closed.
+        """
+        agent = self.env.unwrapped.agent
+        qpos = agent.robot.get_qpos()
+        if not torch.is_tensor(qpos):
+            qpos = torch.as_tensor(qpos, device=self.env.device)
+        qpos = qpos.to(dtype=torch.float32)
+        n_arm = len(agent.arm_joint_names)
+        close_qpos = torch.as_tensor(
+            np.asarray(agent.hand_close_qpos, dtype=np.float32), device=qpos.device
+        )
+        arm_qpos = qpos[:, :n_arm]
+        hand_closure = (qpos[:, n_arm:] / close_qpos).clamp(0.0, 1.0).mean(dim=1, keepdim=True)
+        return torch.cat([arm_qpos, hand_closure], dim=1)
+
+    def _form_obs(self, obs: dict):
+        """Return the policy observation: composited image tensor (v1) or dict of separate inputs (v2)."""
+        if self._vla_model_variant == "v2":
+            scene_rgb, wrist_rgb = _openvla_scene_wrist_images(obs)
+            return {
+                "image": scene_rgb,
+                "image_wrist": wrist_rgb,
+                "proprio": self._get_proprio_7d(),
+            }
+        return _openvla_obs_image(obs, wrist_inset_bottom_right=self._wrist_inset_bottom_right)
+
     def get_reward(self, info):
-        reward = torch.zeros(self.num_envs, 1, dtype=torch.float32).to(info["success"].device)  # [B, 1]
-
-        reward += info["is_src_obj_grasped"].reshape(-1, 1) * 0.1
-        reward += info["consecutive_grasp"].reshape(-1, 1) * 0.1
-        reward += info["success"].reshape(-1, 1) * 1.0
-
-        # diff
-        reward_diff = reward - self.reward_old
+        reward_diff, reward = _shaped_grasp_reward(info, self.reward_old, self.args, step=self._shaping_step)
         self.reward_old = reward
-
         return reward_diff
 
     def _process_action(self, raw_actions: torch.Tensor) -> torch.Tensor:
@@ -371,7 +614,7 @@ class SimlerWrapper:
         }
         action = {}
         action["world_vector"] = raw_action["world_vector"] * action_scale  # [B, 3]
-        action["gripper"] = 2.0 * (raw_action["open_gripper"] > 0.5) - 1.0  # [B, 1]
+        action["gripper"] = _quantize_gripper_openness(torch.as_tensor(raw_action["open_gripper"]))  # [B, 1] levels
 
         # origin euler
         action["rot_axangle"] = raw_action["rotation_delta"]
@@ -382,8 +625,7 @@ class SimlerWrapper:
 
         # to tpdv
         action = action.to(raw_actions.device)
-
-        return action
+        return _clip_ee_delta(action, float(getattr(self.args, "max_ee_delta", 0.0) or 0.0))
 
     def reset(self, obj_set: str, same_init: bool = False):
         options = self._real2sim_reset_options()
@@ -400,10 +642,11 @@ class SimlerWrapper:
             options["use_default_task"] = True
 
         obs, info = self.env.reset(options=options)
-        obs_image = _openvla_obs_image(obs, wrist_inset_bottom_right=self._wrist_inset_bottom_right)
+        obs_image = self._form_obs(obs)
         instruction = self.env.unwrapped.get_language_instruction()
 
-        self.reward_old = torch.zeros(self.num_envs, 1, dtype=torch.float32).to(obs_image.device)  # [B, 1]
+        self.reward_old = torch.zeros(self.num_envs, 1, dtype=torch.float32).to(self.env.device)  # [B, 1]
+        self.hold_assist.reset(self.env.device)
         self._eval_debug_step = 0
         self._write_eval_debug(
             {
@@ -421,23 +664,20 @@ class SimlerWrapper:
     def step(self, raw_action):
         tcp0 = _tcp_xyz(self.env)
         joints0 = _joint_debug(self.env)
-        action = self._process_action(raw_action)
+        action = self.hold_assist.before_physics(self._process_action(raw_action))
 
         obs, _reward, _terminated, truncated, info = self.env.step(action)
         tcp1 = _tcp_xyz(self.env)
         joints1 = _joint_debug(self.env)
-        obs_image = _openvla_obs_image(obs, wrist_inset_bottom_right=self._wrist_inset_bottom_right)
-        truncated = truncated.reshape(-1, 1)  # [B, 1]
+        obs_image = self._form_obs(obs)
+        time_limit = truncated.reshape(-1, 1)  # [B, 1]
 
         # calculate reward
         reward = self.get_reward(info)
-
-        # process episode info
-        if truncated.any():
-            info["episode"] = {}
-            for k in ["is_src_obj_grasped", "consecutive_grasp", "success"]:
-                v = [info[k][idx].item() for idx in range(self.num_envs)]
-                info["episode"][k] = v
+        reward, absorbed = self.hold_assist.after_physics(info, reward)
+        done = time_limit.to(dtype=torch.bool) | absorbed.to(dtype=torch.bool, device=time_limit.device)
+        _fill_episode_info(info, time_limit, self.hold_assist)
+        truncated = done.to(dtype=time_limit.dtype)
 
         self._write_eval_debug(
             {
@@ -481,9 +721,9 @@ class SimlerContinuousWrapper:
         env_config = dict(
             id=self.args.env_id,
             num_envs=self.args.num_envs,
-            obs_mode="rgb+segmentation",
+            obs_mode=_obs_mode_for_env(self.args.env_id),
             control_mode=robot_control_mode,
-            sim_backend="gpu",
+            sim_backend=_sim_backend(),
             enable_shadow=True,
             sim_config={
                 "sim_freq": DEFAULT_REAL2SIM_SIM_FREQ,
@@ -495,11 +735,15 @@ class SimlerContinuousWrapper:
         )
         if _is_openreal2sim_env(self.args.env_id):
             env_config.update(_openreal2sim_rl_gym_kwargs(use_wrist_camera=bool(self.args.use_wrist_camera)))
+            env_config["obs_mode"] = _obs_mode_for_env(self.args.env_id)
         self.env: BaseEnv = gym.make(**env_config)
         self.env.reset(seed=[self.args.seed * 1000 + i + extra_seed for i in range(self.args.num_envs)])
         self._reset_counter = 0
 
         self.reward_old = torch.zeros(self.args.num_envs, 1, dtype=torch.float32)
+        self.hold_assist = GraspHoldAssist(self.args, self.num_envs)
+        self._shaping_step = 0
+        print(_reward_shaping_log_line(self.args))
         self._setup_eval_debug()
 
     def _setup_eval_debug(self):
@@ -558,17 +802,17 @@ class SimlerContinuousWrapper:
             raise ValueError("obs_img is required when camera_name is empty.")
         return obs_img.detach().cpu().numpy()
 
+    def set_shaping_step(self, step: int):
+        self._shaping_step = int(step)
+
     def get_reward(self, info):
-        reward = torch.zeros(self.num_envs, 1, dtype=torch.float32).to(info["success"].device)
-        reward += info["is_src_obj_grasped"].reshape(-1, 1) * 0.1
-        reward += info["consecutive_grasp"].reshape(-1, 1) * 0.1
-        reward += info["success"].reshape(-1, 1) * 1.0
-        reward_diff = reward - self.reward_old
+        reward_diff, reward = _shaped_grasp_reward(info, self.reward_old, self.args, step=self._shaping_step)
         self.reward_old = reward
         return reward_diff
 
     def _process_action(self, raw_actions: torch.Tensor) -> torch.Tensor:
-        return _unnormalize_continuous_action(raw_actions, self.unnorm_state)
+        action = _unnormalize_continuous_action(raw_actions, self.unnorm_state)
+        return _clip_ee_delta(action, float(getattr(self.args, "max_ee_delta", 0.0) or 0.0))
 
     def reset(self, obj_set: str, same_init: bool = False):
         options = self._real2sim_reset_options()
@@ -589,6 +833,7 @@ class SimlerContinuousWrapper:
         instruction = self.env.unwrapped.get_language_instruction()
 
         self.reward_old = torch.zeros(self.num_envs, 1, dtype=torch.float32).to(obs_image.device)
+        self.hold_assist.reset(obs_image.device)
         self._eval_debug_step = 0
         self._write_eval_debug(
             {
@@ -605,20 +850,18 @@ class SimlerContinuousWrapper:
     def step(self, raw_action):
         tcp0 = _tcp_xyz(self.env)
         joints0 = _joint_debug(self.env)
-        action = self._process_action(raw_action)
+        action = self.hold_assist.before_physics(self._process_action(raw_action))
         obs, _reward, _terminated, truncated, info = self.env.step(action)
         tcp1 = _tcp_xyz(self.env)
         joints1 = _joint_debug(self.env)
         obs_image = _openvla_obs_image(obs, wrist_inset_bottom_right=self._wrist_inset_bottom_right)
-        truncated = truncated.reshape(-1, 1)
+        time_limit = truncated.reshape(-1, 1)
 
         reward = self.get_reward(info)
-
-        if truncated.any():
-            info["episode"] = {}
-            for k in ["is_src_obj_grasped", "consecutive_grasp", "success"]:
-                v = [info[k][idx].item() for idx in range(self.num_envs)]
-                info["episode"][k] = v
+        reward, absorbed = self.hold_assist.after_physics(info, reward)
+        done = time_limit.to(dtype=torch.bool) | absorbed.to(dtype=torch.bool, device=time_limit.device)
+        _fill_episode_info(info, time_limit, self.hold_assist)
+        truncated = done.to(dtype=time_limit.dtype)
 
         self._write_eval_debug(
             {

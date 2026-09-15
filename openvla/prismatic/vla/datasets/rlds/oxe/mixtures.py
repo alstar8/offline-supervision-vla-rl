@@ -196,6 +196,9 @@ OXE_NAMED_MIXTURES: Dict[str, List[Tuple[str, float]]] = {
     "sft": [
         ("sft", 1.0),
     ],
+    "sft_v2": [
+        ("sft_v2", 1.0),
+    ],
 
     # === LIBERO Datasets (Modified Versions) ===
     "libero_spatial_no_noops": [

@@ -21,6 +21,7 @@ Run with:
 
 import os
 import copy
+import json
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +30,7 @@ from typing import Optional
 import draccus
 import torch
 import torch.distributed as dist
+import torch.nn as nn
 import tqdm
 from accelerate import PartialState
 from peft import LoraConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
@@ -42,12 +44,16 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 import wandb
 from prismatic.models.backbones.llm.prompting import PurePromptBuilder, VicunaV15ChatPromptBuilder
 from prismatic.util.data_utils import PaddedCollatorForActionPrediction
-from prismatic.vla.action_tokenizer import ActionTokenizer
+from prismatic.vla.action_tokenizer import (
+    ActionTokenizer,
+    parse_action_dim_loss_weights,
+    weighted_action_token_ce_loss,
+)
 from prismatic.vla.datasets import RLDSBatchTransform, RLDSDataset
 from prismatic.vla.datasets.rlds.utils.data_utils import save_dataset_statistics
 
-from prismatic.extern.hf.configuration_prismatic import OpenVLAConfig
-from prismatic.extern.hf.modeling_prismatic import OpenVLAForActionPrediction
+from prismatic.extern.hf.configuration_prismatic import OpenVLAConfig, OpenVLAV2Config
+from prismatic.extern.hf.modeling_prismatic import OpenVLAForActionPrediction, OpenVLAV2ForActionPrediction
 from prismatic.extern.hf.processing_prismatic import PrismaticImageProcessor, PrismaticProcessor
 
 # Sane Defaults
@@ -72,6 +78,28 @@ FIXED_UNNORM_STATS = {
 }
 
 ACTION_DIM_NAMES = ("x", "y", "z", "rot_x", "rot_y", "rot_z", "gripper")
+
+# PEFT 0.11.1 matches a string `target_modules` with `re.fullmatch`.
+# Keep projector / proprio_projector / lm_head out of LoRA so they can be
+# fully trained via `modules_to_save` without the wrap/save conflict that
+# `all-linear` hits on projector fc1/fc2.
+LORA_TARGET_LLM = r".*language_model\..*(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)$"
+LORA_TARGET_VISION_LLM = (
+    r".*(vision_backbone\..*(qkv|proj|q|kv|fc1|fc2)"
+    r"|language_model\..*(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj))$"
+)
+
+
+def resolve_lora_target_modules(lora_target: str) -> str:
+    if lora_target == "llm":
+        return LORA_TARGET_LLM
+    if lora_target == "vision_llm":
+        return LORA_TARGET_VISION_LLM
+    if lora_target == "all-linear":
+        return "all-linear"
+    raise ValueError(
+        f"Unknown lora_target={lora_target!r}; expected 'all-linear', 'llm', or 'vision_llm'."
+    )
 
 
 def resolve_unnorm_stats(norm_stats: dict, unnorm_key: Optional[str]) -> Optional[dict]:
@@ -190,6 +218,9 @@ class FinetuneConfig:
     lora_dropout: float = 0.0                                       # Dropout applied to LoRA weights
     use_quantization: bool = False                                  # Whether to 4-bit quantize VLA for LoRA fine-tuning
                                                                     #   => CAUTION: Reduces memory but hurts performance
+    lora_target: str = "all-linear"                                 # "all-linear" (legacy), "llm", or "vision_llm"
+    train_projector: bool = False                                   # Fully train vision (+ proprio) projectors
+    train_action_head: bool = False                                 # Fully train the LM head (action-token output layer)
 
     # Tracking Parameters
     wandb_project: str = "openvla"                                  # Name of W&B project to log to (use default!)
@@ -197,6 +228,15 @@ class FinetuneConfig:
 
     # fmt: on
     unnorm_key: Optional[str] = None
+
+    # OpenVLA_V2 (dual camera + proprio) — only used when vla_model_variant == "v2"
+    vla_model_variant: str = "v1"                                   # "v1" (single composited image) or "v2" (separate scene+wrist + proprio)
+    proprio_dim: int = 7                                            # Proprioceptive state dimension (v2)
+    num_images_in_input: int = 2                                    # Number of separate camera streams (v2)
+    # Decode native camera sizes and let Prismatic apply_transform match RL eval.
+    skip_image_resize: bool = False
+    # Per-dim CE weights x,y,z,rx,ry,rz,gripper. Empty = HuggingFace mean CE.
+    action_dim_loss_weights: str = ""
 
 
 @draccus.wrap()
@@ -236,16 +276,57 @@ def finetune(cfg: FinetuneConfig) -> None:
     AutoImageProcessor.register(OpenVLAConfig, PrismaticImageProcessor)
     AutoProcessor.register(OpenVLAConfig, PrismaticProcessor)
     AutoModelForVision2Seq.register(OpenVLAConfig, OpenVLAForActionPrediction)
+    is_v2 = cfg.vla_model_variant == "v2"
+    if is_v2:
+        AutoConfig.register("openvla_v2", OpenVLAV2Config)
+        AutoImageProcessor.register(OpenVLAV2Config, PrismaticImageProcessor)
+        AutoProcessor.register(OpenVLAV2Config, PrismaticProcessor)
+        AutoModelForVision2Seq.register(OpenVLAV2Config, OpenVLAV2ForActionPrediction)
 
     # Load OpenVLA Processor and Model using HF AutoClasses
     processor = AutoProcessor.from_pretrained(cfg.vla_path, trust_remote_code=True)
-    vla = AutoModelForVision2Seq.from_pretrained(
-        cfg.vla_path,
-        torch_dtype=torch.bfloat16,
-        quantization_config=quantization_config,
-        low_cpu_mem_usage=True,
-        trust_remote_code=True,
-    )
+    if is_v2:
+        # Build the V2 config from the base checkpoint's config; new modules (proprio projector)
+        # are randomly initialized and fully trained via LoRA `modules_to_save`.
+        base_config = AutoConfig.from_pretrained(cfg.vla_path, trust_remote_code=True)
+        config_dict = base_config.to_dict()
+        config_dict.pop("model_type", None)
+        v2_config = OpenVLAV2Config(
+            **config_dict,
+            use_proprio=True,
+            proprio_dim=cfg.proprio_dim,
+            num_images_in_input=cfg.num_images_in_input,
+        )
+        vla = OpenVLAV2ForActionPrediction.from_pretrained(
+            cfg.vla_path,
+            config=v2_config,
+            torch_dtype=torch.bfloat16,
+            quantization_config=quantization_config,
+            low_cpu_mem_usage=True,
+            trust_remote_code=True,
+        )
+    else:
+        vla = AutoModelForVision2Seq.from_pretrained(
+            cfg.vla_path,
+            torch_dtype=torch.bfloat16,
+            quantization_config=quantization_config,
+            low_cpu_mem_usage=True,
+            trust_remote_code=True,
+        )
+
+    # New V2 modules (e.g. `proprio_projector`) are absent from the base checkpoint, so with
+    # `low_cpu_mem_usage=True` they stay on the meta device and crash `.to(device_id)`. Re-init
+    # any leaf module still on meta as real (CPU) tensors before device placement.
+    def _materialize_meta_leaves(module: nn.Module) -> None:
+        for child in module.children():
+            _materialize_meta_leaves(child)
+        direct_params = list(module.parameters(recurse=False))
+        if direct_params and any(p.is_meta for p in direct_params):
+            module.to_empty(device="cpu")
+            if hasattr(module, "reset_parameters"):
+                module.reset_parameters()
+
+    _materialize_meta_leaves(vla)
 
     # Device Placement =>> note that BitsAndBytes automatically handles for quantized training
     if cfg.use_quantization:
@@ -253,14 +334,31 @@ def finetune(cfg: FinetuneConfig) -> None:
     else:
         vla = vla.to(device_id)
 
-    # [LoRA] Wrap Model w/ PEFT `LoraConfig` =>> by default we set `target_modules=all-linear`
+    # [LoRA] Wrap Model w/ PEFT `LoraConfig`
     if cfg.use_lora:
+        target_modules = resolve_lora_target_modules(cfg.lora_target)
+        modules_to_save: list[str] = []
+        if cfg.train_projector:
+            # Whole containers are safe when LoRA does not wrap projector Linears
+            # (`llm` / `vision_llm`). "projector" suffix-matches both `projector`
+            # and `proprio_projector` — all projectors are fully trained.
+            modules_to_save += ["projector"]
+        elif is_v2:
+            # The proprio projector is new (not pretrained) — train it fully and save it with the
+            # adapter. Target the leaf Linears (not the `proprio_projector` container): with PEFT
+            # 0.11.1 + `target_modules="all-linear"`, wrapping the container first would break the
+            # fc1/fc2 paths that all-linear also matches, crashing `_get_submodules`.
+            modules_to_save += ["proprio_projector.fc1", "proprio_projector.fc2"]
+        if cfg.train_action_head:
+            # The LM head produces the action-token logits — the action-generating output layer.
+            modules_to_save += ["language_model.lm_head"]
         lora_config = LoraConfig(
             r=cfg.lora_rank,
             lora_alpha=min(cfg.lora_rank, 16),
             lora_dropout=cfg.lora_dropout,
-            target_modules="all-linear",
+            target_modules=target_modules,
             init_lora_weights="gaussian",
+            modules_to_save=modules_to_save or None,
         )
         vla = get_peft_model(vla, lora_config)
         vla.print_trainable_parameters()
@@ -295,6 +393,8 @@ def finetune(cfg: FinetuneConfig) -> None:
         processor.tokenizer,
         image_transform=processor.image_processor.apply_transform,
         prompt_builder_fn=PurePromptBuilder if "v01" not in cfg.vla_path else VicunaV15ChatPromptBuilder,
+        num_images_in_input=cfg.num_images_in_input if is_v2 else 1,
+        use_proprio=is_v2,
     )
     unnorm_stats = resolve_unnorm_stats(vla.module.base_model.norm_stats, cfg.unnorm_key)
     vla_dataset = RLDSDataset(
@@ -305,7 +405,10 @@ def finetune(cfg: FinetuneConfig) -> None:
         shuffle_buffer_size=cfg.shuffle_buffer_size,
         image_aug=cfg.image_aug,
         train=True,
-        unnorm_stats=unnorm_stats
+        unnorm_stats=unnorm_stats,
+        num_images_in_input=cfg.num_images_in_input if is_v2 else 1,
+        load_proprio=is_v2,
+        skip_image_resize=cfg.skip_image_resize,
     )
     add_dataset_statistics_alias(vla_dataset.dataset_statistics, cfg.dataset_name, cfg.unnorm_key)
 
@@ -336,7 +439,10 @@ def finetune(cfg: FinetuneConfig) -> None:
         shuffle_buffer_size=cfg.shuffle_buffer_size,
         image_aug=cfg.image_aug,
         train=False,
-        unnorm_stats=unnorm_stats
+        unnorm_stats=unnorm_stats,
+        num_images_in_input=cfg.num_images_in_input if is_v2 else 1,
+        load_proprio=is_v2,
+        skip_image_resize=cfg.skip_image_resize,
     )
     dataloader_eval = DataLoader(
         vla_dataset_eval,
@@ -358,6 +464,9 @@ def finetune(cfg: FinetuneConfig) -> None:
     recent_per_dim_l1 = {name: deque(maxlen=cfg.grad_accumulation_steps) for name in ACTION_DIM_NAMES}
     recent_per_dim_acc = {name: deque(maxlen=cfg.grad_accumulation_steps) for name in ACTION_DIM_NAMES}
 
+    dim_weights = parse_action_dim_loss_weights(cfg.action_dim_loss_weights)
+    last_eval_metrics = {}
+
     # Train!
     with tqdm.tqdm(total=cfg.max_steps, leave=False) as progress:
         vla.train()
@@ -369,8 +478,18 @@ def finetune(cfg: FinetuneConfig) -> None:
                     attention_mask=batch["attention_mask"].to(device_id),
                     pixel_values=batch["pixel_values"].to(torch.bfloat16).to(device_id),
                     labels=batch["labels"],
+                    proprio=batch["proprio"].to(device_id) if "proprio" in batch else None,
                 )
-                loss = output.loss
+                if dim_weights is None:
+                    loss = output.loss
+                else:
+                    loss = weighted_action_token_ce_loss(
+                        output.logits,
+                        batch["labels"],
+                        num_visual_tokens=vla.module.num_visual_tokens,
+                        action_token_begin_idx=action_tokenizer.action_token_begin_idx,
+                        dim_weights=dim_weights,
+                    )
 
             # Normalize loss to account for gradient accumulation
             normalized_loss = loss / cfg.grad_accumulation_steps
@@ -379,7 +498,7 @@ def finetune(cfg: FinetuneConfig) -> None:
             normalized_loss.backward()
 
             # Compute Accuracy and L1 Loss for Logging
-            action_logits = output.logits[:, vla.module.vision_backbone.featurizer.patch_embed.num_patches : -1]
+            action_logits = output.logits[:, vla.module.num_visual_tokens : -1]
             action_preds = action_logits.argmax(dim=2)
             action_gt = batch["labels"][:, 1:].to(action_preds.device)
             mask = action_gt > action_tokenizer.action_token_begin_idx
@@ -453,12 +572,22 @@ def finetune(cfg: FinetuneConfig) -> None:
                             attention_mask=eval_batch["attention_mask"].to(device_id),
                             pixel_values=eval_batch["pixel_values"].to(torch.bfloat16).to(device_id),
                             labels=eval_batch["labels"],
+                            proprio=eval_batch["proprio"].to(device_id) if "proprio" in eval_batch else None,
                         )
-                        loss = output_eval.loss
+                        if dim_weights is None:
+                            loss = output_eval.loss
+                        else:
+                            loss = weighted_action_token_ce_loss(
+                                output_eval.logits,
+                                eval_batch["labels"],
+                                num_visual_tokens=vla.module.num_visual_tokens,
+                                action_token_begin_idx=action_tokenizer.action_token_begin_idx,
+                                dim_weights=dim_weights,
+                            )
 
                         # Compute Accuracy and L1 Loss for Logging
                         action_logits = output_eval.logits[:,
-                                        vla.module.vision_backbone.featurizer.patch_embed.num_patches: -1]
+                                        vla.module.num_visual_tokens: -1]
                         action_preds = action_logits.argmax(dim=2)
                         action_gt = eval_batch["labels"][:, 1:].to(action_preds.device)
                         mask = action_gt > action_tokenizer.action_token_begin_idx
@@ -496,6 +625,13 @@ def finetune(cfg: FinetuneConfig) -> None:
                         )
 
                 if distributed_state.is_main_process:
+                    last_eval_metrics = {
+                        "eval_loss": eval_loss,
+                        "eval_action_accuracy": eval_action_accuracy,
+                        "eval_l1_loss": eval_l1_loss,
+                        **eval_per_dim,
+                        "step": int(gradient_step_idx),
+                    }
                     wandb.log(
                         {
                             "eval_loss": eval_loss,
@@ -522,7 +658,17 @@ def finetune(cfg: FinetuneConfig) -> None:
                     vla.module.save_pretrained(lora_save_dir)
 
                     save_dataset_statistics(vla_dataset.dataset_statistics, lora_save_dir)
+                    eval_path = lora_save_dir / "eval_metrics.json"
+                    eval_path.write_text(json.dumps(last_eval_metrics, indent=2) + "\n")
                     print(dataset_statistics_message(cfg.dataset_name, cfg.unnorm_key))
+                    if last_eval_metrics:
+                        print(
+                            "Saved eval metrics | "
+                            f"x_acc={last_eval_metrics.get('eval_action_accuracy/x')} "
+                            f"y_acc={last_eval_metrics.get('eval_action_accuracy/y')} "
+                            f"step={last_eval_metrics.get('step')}",
+                            flush=True,
+                        )
 
                 # Wait for processor and adapter weights to be saved by main process
                 dist.barrier()

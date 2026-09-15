@@ -56,8 +56,9 @@ def decode_and_resize(
     if isinstance(depth_resize_size, tuple):
         depth_resize_size = {name: depth_resize_size for name in depth_names}
 
+    skip_all_resize = isinstance(resize_size, dict) and len(resize_size) == 0
     for name in image_names:
-        if name not in resize_size:
+        if name not in resize_size and not skip_all_resize:
             logging.warning(
                 f"No resize_size was provided for image_{name}. This will result in 1x1 "
                 "padding images, which may cause errors if you mix padding and non-padding images."

@@ -183,7 +183,7 @@ def load_scene_config(scene_json_path: str | Path) -> SceneConfig:
 
 SIM2REAL_REPO_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_SCENE_JSON_PATH = (
-    SIM2REAL_REPO_ROOT / "assets" / "scenes" / "airi_table_new_empty3_image" / "simulation" / "scene.json"
+    SIM2REAL_REPO_ROOT / "assets" / "scenes" / "airy_table_scene14sep26_left_image" / "simulation" / "scene.json"
 )
 
 

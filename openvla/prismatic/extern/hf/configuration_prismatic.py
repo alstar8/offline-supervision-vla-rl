@@ -87,6 +87,9 @@ class PrismaticConfig(PretrainedConfig):
             pad_token_id: int = 32000,
             pad_to_multiple_of: int = 64,
             output_projector_states: bool = False,
+            use_proprio: bool = False,
+            proprio_dim: int = 7,
+            num_images_in_input: int = 1,
             **kwargs: str,
     ) -> None:
         if vision_backbone_id not in VALID_VISION_BACKBONES:
@@ -117,6 +120,11 @@ class PrismaticConfig(PretrainedConfig):
         self.llm_max_length = llm_max_length
         self.pad_token_id, self.pad_to_multiple_of = pad_token_id, pad_to_multiple_of
 
+        # OpenVLA-OFT-style extensions: proprioceptive state input and multi-image (multi-camera) input
+        self.use_proprio = use_proprio
+        self.proprio_dim = proprio_dim
+        self.num_images_in_input = num_images_in_input
+
         # [IMPORTANT] HF Utilities actually look for a `text_config` field... we need to use that specific naming!
         self.text_config = (
             CONFIG_MAPPING[LLM_BACKBONE_TO_HF_METACLASS[self.llm_backbone_id]](**text_config)
@@ -140,3 +148,23 @@ class OpenVLAConfig(PrismaticConfig):
         self.norm_stats, self.n_action_bins = norm_stats, n_action_bins
 
         super().__init__(**kwargs)
+
+
+class OpenVLAV2Config(OpenVLAConfig):
+    """OpenVLA with OpenVLA-OFT-style extras: separate multi-camera images + proprioceptive state."""
+
+    model_type: str = "openvla_v2"
+
+    def __init__(
+            self,
+            use_proprio: bool = True,
+            proprio_dim: int = 7,
+            num_images_in_input: int = 2,
+            **kwargs: str,
+    ) -> None:
+        super().__init__(
+            use_proprio=use_proprio,
+            proprio_dim=proprio_dim,
+            num_images_in_input=num_images_in_input,
+            **kwargs,
+        )

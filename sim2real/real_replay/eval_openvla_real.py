@@ -40,7 +40,7 @@ DEFAULT_CHECKPOINT = (
     / "runs/rl/pick_red_cube_sft_databc/wandb/offline-run-20260909_171210-wm5o2078/glob/steps_0059"
 )
 DEFAULT_SCENE_JSON = (
-    SIM2REAL_ROOT / "assets/scenes/airi_table_new_empty3_image/simulation/scene.json"
+    SIM2REAL_ROOT / "assets/scenes/airy_table_scene14sep26_left_image/simulation/scene.json"
 )
 DEFAULT_OUTPUT_ROOT = SIM2REAL_ROOT / "runs/rl/pick_red_cube_sft_databc/real_eval"
 DEFAULT_INSTRUCTION = "Pick red cube"

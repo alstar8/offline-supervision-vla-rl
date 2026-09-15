@@ -66,6 +66,13 @@ OXE_DATASET_CONFIGS = {
         "state_encoding": StateEncoding.NONE,
         "action_encoding": ActionEncoding.EEF_POS,
     },
+    "sft_v2": {
+        "image_obs_keys": {"primary": "image", "secondary": "image_wrist"},
+        "depth_obs_keys": {"primary": None, "secondary": None},
+        "state_obs_keys": ["proprio"],
+        "state_encoding": StateEncoding.NONE,
+        "action_encoding": ActionEncoding.EEF_POS,
+    },
     "real2sim_custom_scene_sft": {
         "image_obs_keys": {"primary": "image"},
         "depth_obs_keys": {},

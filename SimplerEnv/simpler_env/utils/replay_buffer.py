@@ -15,8 +15,17 @@ class SeparatedReplayBuffer(object):
         self.store_rollouts_on_cpu = getattr(all_args, "store_rollouts_on_cpu", True)
         self.device = device
 
+        # OpenVLA_V2: separate wrist-camera image + proprioceptive state per step
+        self.vla_model_variant = str(getattr(all_args, "vla_model_variant", "v1"))
+        self.is_vla_v2 = self.vla_model_variant == "v2"
+        self.wrist_dim = tuple(getattr(all_args, "vla_wrist_dim", (224, 168, 3)))
+        self.proprio_dim = int(getattr(all_args, "vla_proprio_dim", 7))
+
         if self.store_rollouts_on_cpu:
             self.obs = np.zeros((self.total_steps + 1, self.num_env, *obs_dim), dtype=np.uint8)
+            if self.is_vla_v2:
+                self.obs_wrist = np.zeros((self.total_steps + 1, self.num_env, *self.wrist_dim), dtype=np.uint8)
+                self.proprio = np.zeros((self.total_steps + 1, self.num_env, self.proprio_dim), dtype=np.float32)
             self.instruction = [""] * self.num_env
             self.value_preds = np.zeros((self.total_steps + 1, self.num_env, 1), dtype=np.float32)
             self.returns = np.zeros((self.total_steps, self.num_env, 1), dtype=np.float32)
@@ -29,6 +38,13 @@ class SeparatedReplayBuffer(object):
             if self.device is None:
                 self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
             self.obs = torch.zeros((self.total_steps + 1, self.num_env, *obs_dim), dtype=torch.uint8, device=self.device)
+            if self.is_vla_v2:
+                self.obs_wrist = torch.zeros(
+                    (self.total_steps + 1, self.num_env, *self.wrist_dim), dtype=torch.uint8, device=self.device
+                )
+                self.proprio = torch.zeros(
+                    (self.total_steps + 1, self.num_env, self.proprio_dim), dtype=torch.float32, device=self.device
+                )
             self.instruction = [""] * self.num_env
             self.value_preds = torch.zeros((self.total_steps + 1, self.num_env, 1), dtype=torch.float32, device=self.device)
             self.returns = torch.zeros((self.total_steps, self.num_env, 1), dtype=torch.float32, device=self.device)
@@ -45,11 +61,18 @@ class SeparatedReplayBuffer(object):
             return value.to(device=self.device, dtype=dtype)
         return torch.as_tensor(value, device=self.device, dtype=dtype)
 
-    def insert(self, obs, actions, action_log_probs, value_preds, rewards, masks):
+    def insert(self, obs, actions, action_log_probs, value_preds, rewards, masks, obs_wrist=None, proprio=None):
         if self.step >= self.total_steps:
             raise ValueError(f"Buffer overflow: step={self.step}, total_steps={self.total_steps}")
         if self.store_rollouts_on_cpu:
             self.obs[self.step + 1] = obs.copy()
+            if self.is_vla_v2:
+                self.obs_wrist[self.step + 1] = (
+                    obs_wrist.detach().cpu().numpy() if torch.is_tensor(obs_wrist) else np.asarray(obs_wrist)
+                )
+                self.proprio[self.step + 1] = (
+                    proprio.detach().cpu().numpy() if torch.is_tensor(proprio) else np.asarray(proprio)
+                )
             self.actions[self.step] = actions.copy()
             self.action_log_probs[self.step] = action_log_probs.copy()
             self.value_preds[self.step] = value_preds.copy()
@@ -57,6 +80,9 @@ class SeparatedReplayBuffer(object):
             self.masks[self.step + 1] = masks.copy()
         else:
             self.obs[self.step + 1].copy_(self._to_tensor(obs, torch.uint8))
+            if self.is_vla_v2:
+                self.obs_wrist[self.step + 1].copy_(self._to_tensor(obs_wrist, torch.uint8))
+                self.proprio[self.step + 1].copy_(self._to_tensor(proprio, torch.float32))
             self.actions[self.step].copy_(self._to_tensor(actions, torch.int32))
             self.action_log_probs[self.step].copy_(self._to_tensor(action_log_probs, torch.float32))
             self.value_preds[self.step].copy_(self._to_tensor(value_preds, torch.float32))
@@ -65,15 +91,25 @@ class SeparatedReplayBuffer(object):
 
         self.step += 1
 
-    def warmup(self, obs, instruction, step_offset: int = 0):
+    def warmup(self, obs, instruction, step_offset: int = 0, obs_wrist=None, proprio=None):
         if self.store_rollouts_on_cpu:
             if torch.is_tensor(obs):
                 obs = obs.cpu().numpy()
             self.obs[step_offset] = obs
+            if self.is_vla_v2:
+                if torch.is_tensor(obs_wrist):
+                    obs_wrist = obs_wrist.detach().cpu().numpy()
+                self.obs_wrist[step_offset] = obs_wrist
+                if torch.is_tensor(proprio):
+                    proprio = proprio.detach().cpu().numpy()
+                self.proprio[step_offset] = proprio
             self.instruction = instruction
             self.masks[step_offset] = 1.0
         else:
             self.obs[step_offset].copy_(self._to_tensor(obs, torch.uint8))
+            if self.is_vla_v2:
+                self.obs_wrist[step_offset].copy_(self._to_tensor(obs_wrist, torch.uint8))
+                self.proprio[step_offset].copy_(self._to_tensor(proprio, torch.float32))
             self.instruction = instruction
             self.masks[step_offset] = 1.0
 
@@ -97,10 +133,12 @@ class SeparatedReplayBuffer(object):
                 self.returns[step] = gae + vt
 
             # calc adv
-            advantages = self.returns - self.value_preds[:-1]
-            mean_advantages = advantages.mean()
-            std_advantages = advantages.std()
-            self.advantages = (advantages - mean_advantages) / (std_advantages + 1e-5)
+            valid = self.masks[:-1]
+            advantages = (self.returns - self.value_preds[:-1]) * valid
+            selected = advantages[valid > 0.5]
+            mean_advantages = selected.mean() if selected.size else 0.0
+            std_advantages = selected.std() if selected.size else 1.0
+            self.advantages = (advantages - mean_advantages) / (std_advantages + 1e-5) * valid
         else:
             gae = torch.zeros_like(self.rewards[0])
             for step in reversed(range(self.rewards.shape[0])):
@@ -111,11 +149,16 @@ class SeparatedReplayBuffer(object):
                 gae = delta + self.gamma * self.gae_lambda * self.masks[step + 1] * gae
                 self.returns[step] = gae + vt
 
-            # calc adv
-            advantages = self.returns - self.value_preds[:-1]
-            mean_advantages = advantages.mean()
-            std_advantages = advantages.std()
-            self.advantages = (advantages - mean_advantages) / (std_advantages + 1e-5)
+            valid = self.masks[:-1]
+            advantages = (self.returns - self.value_preds[:-1]) * valid
+            selected = advantages[valid > 0.5]
+            if selected.numel() == 0:
+                mean_advantages = advantages.new_tensor(0.0)
+                std_advantages = advantages.new_tensor(1.0)
+            else:
+                mean_advantages = selected.mean()
+                std_advantages = selected.std()
+            self.advantages = (advantages - mean_advantages) / (std_advantages + 1e-5) * valid
 
     def compute_returns_grpo(self):
         if self.store_rollouts_on_cpu:
@@ -178,6 +221,9 @@ class SeparatedReplayBuffer(object):
             sampler = [rand[i * self.buffer_minibatch:(i + 1) * self.buffer_minibatch] for i in range(num_mini_batch)]
 
             obs = self.obs[:-1].reshape(-1, *self.obs.shape[2:])
+            if self.is_vla_v2:
+                obs_wrist = self.obs_wrist[:-1].reshape(-1, *self.obs_wrist.shape[2:])
+                proprio = self.proprio[:-1].reshape(-1, self.proprio.shape[-1])
             actions = self.actions.reshape(-1, self.actions.shape[-1])
             value_preds = self.value_preds[:-1].reshape(-1, 1)
             returns = self.returns.reshape(-1, 1)
@@ -199,13 +245,20 @@ class SeparatedReplayBuffer(object):
                 instruct_indices = indices % n_rollout_threads
                 instruct_batch = [self.instruction[i] for i in instruct_indices]
 
-                yield (obs_batch, instruct_batch, actions_batch, value_preds_batch, return_batch, masks_batch,
-                       old_action_logits_batch, adv_targ)
+                if self.is_vla_v2:
+                    yield (obs_batch, obs_wrist[indices], proprio[indices], instruct_batch, actions_batch,
+                           value_preds_batch, return_batch, masks_batch, old_action_logits_batch, adv_targ)
+                else:
+                    yield (obs_batch, instruct_batch, actions_batch, value_preds_batch, return_batch, masks_batch,
+                           old_action_logits_batch, adv_targ)
         else:
             rand = torch.randperm(batch_size, device=self.device)
             sampler = [rand[i * self.buffer_minibatch:(i + 1) * self.buffer_minibatch] for i in range(num_mini_batch)]
 
             obs = self.obs[:-1].reshape(-1, *self.obs.shape[2:])
+            if self.is_vla_v2:
+                obs_wrist = self.obs_wrist[:-1].reshape(-1, *self.obs_wrist.shape[2:])
+                proprio = self.proprio[:-1].reshape(-1, self.proprio.shape[-1])
             actions = self.actions.reshape(-1, self.actions.shape[-1])
             value_preds = self.value_preds[:-1].reshape(-1, 1)
             returns = self.returns.reshape(-1, 1)
@@ -227,8 +280,12 @@ class SeparatedReplayBuffer(object):
                 instruct_indices = (indices % n_rollout_threads).to("cpu").tolist()
                 instruct_batch = [self.instruction[i] for i in instruct_indices]
 
-                yield (obs_batch, instruct_batch, actions_batch, value_preds_batch, return_batch, masks_batch,
-                       old_action_logits_batch, adv_targ)
+                if self.is_vla_v2:
+                    yield (obs_batch, obs_wrist[indices], proprio[indices], instruct_batch, actions_batch,
+                           value_preds_batch, return_batch, masks_batch, old_action_logits_batch, adv_targ)
+                else:
+                    yield (obs_batch, instruct_batch, actions_batch, value_preds_batch, return_batch, masks_batch,
+                           old_action_logits_batch, adv_targ)
 
 
 class ContinuousSeparatedReplayBuffer(SeparatedReplayBuffer):

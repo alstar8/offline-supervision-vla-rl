@@ -850,6 +850,7 @@ def libero_dataset_transform(trajectory: Dict[str, Any]) -> Dict[str, Any]:
 OXE_STANDARDIZATION_TRANSFORMS = {
     "warmup": warmup_dataset_transform,
     "sft": warmup_dataset_transform,
+    "sft_v2": warmup_dataset_transform,
     "real2sim_custom_scene_sft": warmup_dataset_transform,
     "bridge_oxe": bridge_oxe_dataset_transform,
     "bridge_orig": bridge_orig_dataset_transform,

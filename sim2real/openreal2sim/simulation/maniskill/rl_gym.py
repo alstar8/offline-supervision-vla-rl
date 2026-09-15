@@ -27,8 +27,12 @@ from openreal2sim.simulation.maniskill.utils.scene_loader import (
 PICK_RED_CUBE_INSTRUCTION = "Pick red cube"
 PICK_RED_CUBE_OBJECT_ID = "orange_cube_ext"
 RC5_RL_CONTROL_MODE = "arm_pd_ee_target_delta_pose_align2_gripper_pd_joint_pos"
+# Debug/planner configs preallocate a 50k texture pool. PPO + OpenVLA on one GPU
+# only needs scene + 360-photo textures, and the large pool crowds camera buffers.
+RL_RENDERER_MAX_NUM_MATERIALS = 8192
+RL_RENDERER_MAX_NUM_TEXTURES = 2048
 DEFAULT_CONFIG_PATH = SIM2REAL_REPO_ROOT / "config" / "config_debug.yaml"
-DEFAULT_SCENE_KEY = "airi_table_new_empty3_image"
+DEFAULT_SCENE_KEY = "airy_table_scene14sep26_left_image"
 DEFAULT_RL_RANDOM_PLACEMENT = {
     "bounds_min": DEFAULT_REACHABLE_BOUNDS_MIN_XY.tolist(),
     "bounds_max": DEFAULT_REACHABLE_BOUNDS_MAX_XY.tolist(),
@@ -147,6 +151,16 @@ def build_openreal2sim_rl_gym_kwargs(
     apply_lighting_profile_overrides(args, config_overrides)
     apply_hand_contact_profile_overrides(args, config_overrides)
     apply_hand_controller_profile_overrides(args, config_overrides)
+    renderer_kwargs = dict(config_overrides.get("renderer_kwargs") or {})
+    renderer_kwargs["max_num_materials"] = min(
+        int(renderer_kwargs.get("max_num_materials") or RL_RENDERER_MAX_NUM_MATERIALS),
+        RL_RENDERER_MAX_NUM_MATERIALS,
+    )
+    renderer_kwargs["max_num_textures"] = min(
+        int(renderer_kwargs.get("max_num_textures") or RL_RENDERER_MAX_NUM_TEXTURES),
+        RL_RENDERER_MAX_NUM_TEXTURES,
+    )
+    config_overrides["renderer_kwargs"] = renderer_kwargs
     if initialize_renderer:
         initialize_sapien_renderer(config_overrides.get("renderer_kwargs"))
 
@@ -163,7 +177,7 @@ def build_openreal2sim_rl_gym_kwargs(
         args,
         config_overrides,
         render_mode="rgb_array",
-        obs_mode="rgb+segmentation",
+        obs_mode="rgb",
     )
     env_kwargs.pop("num_envs", None)
     env_kwargs.pop("obs_mode", None)

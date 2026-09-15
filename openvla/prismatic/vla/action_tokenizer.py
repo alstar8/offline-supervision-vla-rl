@@ -9,6 +9,14 @@ from typing import List, Union
 import numpy as np
 from transformers import PreTrainedTokenizerBase
 
+from action_token_loss import parse_action_dim_loss_weights, weighted_action_token_ce_loss
+
+__all__ = [
+    "ActionTokenizer",
+    "parse_action_dim_loss_weights",
+    "weighted_action_token_ce_loss",
+]
+
 
 class ActionTokenizer:
     def __init__(

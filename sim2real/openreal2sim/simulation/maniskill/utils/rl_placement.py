@@ -7,9 +7,9 @@ from typing import Iterable, Sequence
 import numpy as np
 
 # Conservative RC5 workspace around the current AIRI-table cube layout.
-DEFAULT_REACHABLE_BOUNDS_MIN_XY = np.array([-0.38, -0.90], dtype=np.float64)
-DEFAULT_REACHABLE_BOUNDS_MAX_XY = np.array([0.05, -0.52], dtype=np.float64)
-DEFAULT_ROBOT_BASE_XY = np.array([0.45, -0.75], dtype=np.float64)
+DEFAULT_REACHABLE_BOUNDS_MIN_XY = np.array([-0.42, -0.78], dtype=np.float64)
+DEFAULT_REACHABLE_BOUNDS_MAX_XY = np.array([0.01, -0.40], dtype=np.float64)
+DEFAULT_ROBOT_BASE_XY = np.array([0.49556433594, -0.616155178655], dtype=np.float64)
 DEFAULT_MIN_ROBOT_CLEARANCE = 0.28
 DEFAULT_PAIR_GAP = 0.015
 DEFAULT_MAX_ATTEMPTS = 80

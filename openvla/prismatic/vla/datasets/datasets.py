@@ -27,6 +27,19 @@ from prismatic.vla.datasets.rlds.utils.data_utils import NormalizationType
 IGNORE_INDEX = -100
 
 
+def prismatic_pixel_values_from_hwc(image_transform: ImageTransform, img) -> torch.Tensor:
+    """Convert HWC PIL/ndarray to the [C, H, W] tensor PrismaticImageProcessor.apply_transform expects."""
+    if not torch.is_tensor(img):
+        img = torch.from_numpy(np.asarray(img)).to(torch.uint8)
+    if img.ndim != 3:
+        raise ValueError(f"Expected image with 3 dims, got shape {tuple(img.shape)}")
+    if img.shape[-1] == 3:
+        img = img.permute(2, 0, 1)
+    img = img.unsqueeze(0)
+    out = image_transform(img)
+    return out.squeeze(0)
+
+
 @dataclass
 class RLDSBatchTransform:
     action_tokenizer: ActionTokenizer
@@ -34,6 +47,8 @@ class RLDSBatchTransform:
     image_transform: ImageTransform
     prompt_builder_fn: Type[PromptBuilder]
     predict_stop_token: bool = True
+    num_images_in_input: int = 1
+    use_proprio: bool = False
 
     def __call__(self, rlds_batch: Dict[str, Any]) -> Dict[str, Any]:
         """Converts a RLDS batch to the format expected by the OpenVLA collator/models."""
@@ -57,14 +72,31 @@ class RLDSBatchTransform:
         # Tensorize =>> Run Image Transform to get `pixel_values` =>> Return
         #   =>> IMPORTANT :: IF WE'RE USING HF LLM.forward(..., labels=labels), SHIFTING HAPPENS _INSIDE_ MODEL!
         input_ids, labels = torch.tensor(input_ids), torch.tensor(labels)
-        pixel_values = self.image_transform(img)
+        if self.num_images_in_input > 1:
+            # Multi-camera (OpenVLA_V2): primary (third-person) + secondary (wrist) as separate images
+            img_wrist = Image.fromarray(rlds_batch["observation"]["image_secondary"][0])
+            pixel_values = torch.stack(
+                [
+                    prismatic_pixel_values_from_hwc(self.image_transform, img),
+                    prismatic_pixel_values_from_hwc(self.image_transform, img_wrist),
+                ],
+                dim=0,
+            )
+        else:
+            pixel_values = prismatic_pixel_values_from_hwc(self.image_transform, img)
 
         # [CRITICAL] We do not want to take the loss for anything but the predicted action tokens!
         labels[: -(len(action) + 1)] = IGNORE_INDEX
         if not self.predict_stop_token:
             labels[-1] = IGNORE_INDEX
 
-        return dict(pixel_values=pixel_values, input_ids=input_ids, labels=labels, dataset_name=dataset_name)
+        out = dict(pixel_values=pixel_values, input_ids=input_ids, labels=labels, dataset_name=dataset_name)
+        if self.use_proprio:
+            # Proprio is already normalized (bounds-q99) by the RLDS frame transform pipeline
+            out["proprio"] = torch.from_numpy(
+                np.asarray(rlds_batch["observation"]["proprio"][0], dtype=np.float32)
+            )
+        return out
 
 
 class RLDSDataset(IterableDataset):
@@ -77,7 +109,10 @@ class RLDSDataset(IterableDataset):
         shuffle_buffer_size: int = 256_000,
         train: bool = True,
         image_aug: bool = False,
-        unnorm_stats = None
+        unnorm_stats = None,
+        num_images_in_input: int = 1,
+        load_proprio: bool = False,
+        skip_image_resize: bool = False,
     ) -> None:
         """Lightweight wrapper around RLDS TFDS Pipeline for use with PyTorch/OpenVLA Data Loaders."""
         self.data_root_dir, self.data_mix, self.batch_transform = data_root_dir, data_mix, batch_transform
@@ -89,13 +124,16 @@ class RLDSDataset(IterableDataset):
             # Assume that passed "mixture" name is actually a single dataset -- create single-dataset "mix"
             mixture_spec = [(self.data_mix, 1.0)]
 
+        # Multi-camera models (OpenVLA_V2) load primary + secondary (wrist) views
+        load_camera_views = ("primary", "secondary")[:num_images_in_input]
+
         # fmt: off
         per_dataset_kwargs, weights = get_oxe_dataset_kwargs_and_weights(
             self.data_root_dir,
             mixture_spec,
-            load_camera_views=("primary",),
+            load_camera_views=load_camera_views,
             load_depth=False,
-            load_proprio=False,
+            load_proprio=load_proprio,
             load_language=True,
             action_proprio_normalization_type=NormalizationType.BOUNDS_Q99,
         )
@@ -107,7 +145,8 @@ class RLDSDataset(IterableDataset):
                 goal_relabeling_strategy="uniform",                 # Goals are currently unused
             ),
             frame_transform_kwargs=dict(
-                resize_size=resize_resolution,
+                # Empty dict = decode only (native H×W). Matches RL Prismatic resize-crop on 640×480 / 224×168.
+                resize_size={} if skip_image_resize else resize_resolution,
                 num_parallel_calls=16,                          # For CPU-intensive ops (decoding, resizing, etc.)
             ),
             dataset_kwargs_list=per_dataset_kwargs,

@@ -13,7 +13,7 @@ def init_wandb_with_online_fallback(
     max_online_attempts: int = 2,
     retry_sleep_sec: float = 3.0,
 ) -> None:
-    if not use_wandb:
+    if not use_wandb or os.environ.get("WANDB_MODE", "").lower() == "offline":
         os.environ["WANDB_MODE"] = "offline"
         wandb.init(config=config, project=project, name=name, mode="offline")
         return

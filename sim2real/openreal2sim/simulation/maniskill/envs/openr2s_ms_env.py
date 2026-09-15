@@ -24,6 +24,10 @@ from mani_skill.utils.structs.pose import Pose
 from transforms3d.euler import euler2quat
 from transforms3d.quaternions import quat2mat
 
+from ..utils.hand_visual_materials import (
+    apply_hand_visual_profile,
+    apply_object_visual_material,
+)
 from ..utils.pano_sphere import (
     DEFAULT_360_PHOTOS_DIR,
     DEFAULT_PANO_SPHERE_RADIUS,
@@ -87,6 +91,34 @@ WRIST_CAMERA_LOCAL_Q = [0.711969, -0.017879, 0.701977, 0.002846]
 THIRD_VIEW_CAMERA_NAME = "3rd_view_camera"
 THIRD_VIEW_WIDTH = 640
 THIRD_VIEW_HEIGHT = 480
+
+
+def _apply_background_render_material(actor, config):
+    """Override background shading without replacing its photographic textures."""
+    allowed = {"base_color", "metallic", "roughness", "specular"}
+    if not isinstance(config, dict) or not config or set(config) - allowed:
+        raise ValueError(f"background_material must contain only {sorted(allowed)}")
+    values = {}
+    for key, value in config.items():
+        array = np.asarray(value, dtype=float)
+        shape = (4,) if key == "base_color" else ()
+        if array.shape != shape or not np.isfinite(array).all() or (array < 0).any() or (array > 1).any():
+            raise ValueError(f"background_material.{key} must have shape {shape} and values in [0, 1]")
+        values[key] = array.tolist() if shape else float(array)
+
+    materials = []
+    for entity in actor._objs:
+        body = entity.find_component_by_type(sapien.render.RenderBodyComponent)
+        if body is not None:
+            for shape in body.render_shapes:
+                for part in shape.parts:
+                    materials.append(part.material)
+    if not materials:
+        raise RuntimeError("background_material configured but no background render materials were found")
+    for material in materials:
+        for key, value in values.items():
+            setattr(material, key, value)
+    print(f"[Lighting] Applied background_material={values} to {len(materials)} material(s)")
 
 
 def _wrist_mount_link(agent):
@@ -249,6 +281,7 @@ class OpenReal2SimEnv(BaseEnv):
         render_camera_target: list = None,
         cameras_config: dict = None,
         lighting_config: dict = None,
+        hand_visual_profile: dict = None,
         robot_base_pose: list = None,
         robot_init_qpos: list = None,
         object_material: dict = None,
@@ -427,6 +460,7 @@ class OpenReal2SimEnv(BaseEnv):
         import copy
         self.cameras_config = copy.deepcopy(cameras_config) if cameras_config is not None else copy.deepcopy(DEFAULT_CAMERAS_CONFIG)
         self.lighting_config = copy.deepcopy(lighting_config) if lighting_config is not None else None
+        self.hand_visual_profile = copy.deepcopy(hand_visual_profile)
 
         # Store render resolution
         self.render_width = render_width if render_width is not None else 512
@@ -691,6 +725,8 @@ class OpenReal2SimEnv(BaseEnv):
                 )
         except Exception as e:
             print(f"[WARN] Could not set robot render material: {e}")
+        if self.hand_visual_profile is not None:
+            apply_hand_visual_profile(self.agent.robot, self.hand_visual_profile)
 
     def _compute_table_surface_z(self, bg_mesh_path: str) -> float | None:
         """Raycast downward from each object center onto the background mesh.
@@ -744,8 +780,15 @@ class OpenReal2SimEnv(BaseEnv):
         _Y, _R = "\033[33m", "\033[0m"
         gpp_z = self.scene_config.ground_plane_point[2]
 
-        if self.auto_placement:
-            self.auto_table_z = self._compute_table_surface_z(bg_path)
+        # Always raycast the table surface so spawn and evaluate share the same Z.
+        # auto_placement only gates clearance / robot-Z / sim_ground_offset rewrites.
+        # Previously auto_placement=false left auto_table_z unset and evaluate
+        # fell back to 0.0, so a cube sitting on a ~0.32 m table looked lifted.
+        self.auto_table_z = self._compute_table_surface_z(bg_path)
+        if self.auto_table_z is None:
+            print(f"{_Y}[Auto] table-surface raycast failed — "
+                  f"object support Z falls back to ground_plane_point "
+                  f"({gpp_z:.4f}){_R}")
 
         if self.auto_placement and self.auto_table_z is not None:
             if not self._clearance_explicit:
@@ -818,6 +861,8 @@ class OpenReal2SimEnv(BaseEnv):
         # RL4VLA-style robot render: specular=0.9, roughness=0.3 (matches Bridge dataset)
         self._apply_robot_render_material()
 
+    def _load_lighting(self, options: dict):
+        # Use the lifecycle hook so BaseEnv does not append its default lights.
         self._setup_lighting()
 
     def _load_background(self):
@@ -1678,6 +1723,10 @@ class OpenReal2SimEnv(BaseEnv):
                 actor = builder.build_static(name=f"object_{obj_config.name}")
             else:
                 actor = builder.build(name=f"object_{obj_config.name}")
+            if self.object_placements.get(obj_id, {}).get("render_material") is not None:
+                apply_object_visual_material(
+                    actor, self.object_placements[obj_id]["render_material"], obj_id
+                )
             self.object_actors[obj_id] = actor
             self._initial_object_poses[obj_id] = init_pose_p
             self._initial_object_quats[obj_id] = init_quat
@@ -1843,6 +1892,8 @@ class OpenReal2SimEnv(BaseEnv):
                 actor = builder.build_static(name=f"object_{ext_name}")
             else:
                 actor = builder.build(name=f"object_{ext_name}")
+            if pl.get("render_material") is not None:
+                apply_object_visual_material(actor, pl["render_material"], ext_id)
             self.object_actors[ext_id] = actor
             self._initial_object_poses[ext_id] = init_pose_p
             self._initial_object_quats[ext_id] = ext_quat
@@ -1855,6 +1906,11 @@ class OpenReal2SimEnv(BaseEnv):
     def _setup_lighting(self):
         """Setup scene lighting."""
         cfg = self.lighting_config or {}
+        if "background_material" in cfg:
+            _apply_background_render_material(self.background_actor, cfg["background_material"])
+        # ManiSkillScene propagates this to every SAPIEN sub-scene.
+        ambient = cfg.get("ambient_light", [0.3, 0.3, 0.3])
+        self.scene.set_ambient_light(ambient)
         directional_lights = cfg.get(
             "directional_lights",
             [{"direction": [0, 0, -1], "color": [1, 1, 1], "shadow": True}],
@@ -1879,26 +1935,24 @@ class OpenReal2SimEnv(BaseEnv):
                 color=light.get("color", [1, 1, 1]),
                 shadow=bool(light.get("shadow", False)),
             )
-        
-        # Set background/clear color to match viewer (light gray instead of black)
-        # This ensures consistent background color in both viewer and rgb_array mode
-        try:
-            # Try to set clear color through render system if available
-            if hasattr(self.scene, 'render_system') and self.scene.render_system is not None:
-                render_system = self.scene.render_system
-                # Try different methods to set background color
-                if hasattr(render_system, 'set_clear_color'):
-                    # Set clear color to light gray (matching typical viewer background)
-                    render_system.set_clear_color(cfg.get("clear_color", [0.5, 0.5, 0.5, 1.0]))
-                elif hasattr(render_system, 'set_background_color'):
-                    render_system.set_background_color(cfg.get("clear_color", [0.5, 0.5, 0.5, 1.0]))
-                # Also try setting ambient light to improve background visibility
-                if hasattr(render_system, 'set_ambient_light'):
-                    render_system.set_ambient_light(cfg.get("ambient_light", [0.3, 0.3, 0.3]))
-        except Exception as e:
-            # If setting background color fails, continue without it
-            # The background mesh should still be visible
-            pass
+
+        print(
+            f"[Lighting] Applied ambient={ambient}, "
+            f"directional_lights={len(directional_lights)}, point_lights={len(point_lights)}"
+        )
+        if "clear_color" in cfg:
+            for sub_scene in self.scene.sub_scenes:
+                render_system = sub_scene.render_system
+                setter = getattr(render_system, "set_clear_color", None)
+                if setter is None:
+                    setter = getattr(render_system, "set_background_color", None)
+                if setter is None:
+                    print(
+                        "[WARNING] [Lighting] clear_color is not supported by this "
+                        "render system; keeping renderer background. Ambient and lights are applied."
+                    )
+                else:
+                    setter(cfg["clear_color"])
 
     def reset_object_poses(self):
         """Reset objects after settle_steps.
@@ -2316,13 +2370,15 @@ class OpenReal2SimEnv(BaseEnv):
             self.episode_stats["gripper_target_dist"] = torch.linalg.norm(gripper_p - target_p, dim=1)
             self.episode_stats["obj_target_dist"] = torch.linalg.norm(source_p - target_p, dim=1)
 
-            return dict(**self.episode_stats, success=success)
+            return dict(
+                **self.episode_stats,
+                success=success,
+                instant_is_src_obj_grasped=is_src_obj_grasped,
+                instant_consecutive_grasp=consecutive_grasp,
+            )
 
-        table_z = (
-            self.auto_table_z + self.scene_z_offset
-            if self.auto_table_z is not None
-            else 0.0
-        )
+        # Same support Z as spawn (raycast table, else ground_plane). Never 0.0.
+        table_z = self._get_object_support_z()
         obj_height_above_table = source_p[:, 2] - table_z
 
         lift_height = self.lift_height if self.lift_height is not None else 0.05
@@ -2338,7 +2394,12 @@ class OpenReal2SimEnv(BaseEnv):
         self.episode_stats["obj_height_above_table"] = obj_height_above_table
         self.episode_stats["gripper_goal_dist"] = torch.linalg.norm(gripper_p - goal_p, dim=1)
 
-        return dict(**self.episode_stats, success=success)
+        return dict(
+            **self.episode_stats,
+            success=success,
+            instant_is_src_obj_grasped=is_src_obj_grasped,
+            instant_consecutive_grasp=consecutive_grasp,
+        )
 
     def _get_obs_extra(self, info: Dict) -> Dict:
         """Get additional task-specific observations."""
@@ -2471,7 +2532,10 @@ class OpenReal2SimEnv(BaseEnv):
                     f"{WRIST_CAMERA_MOUNT_LINKS} was found on the robot"
                 )
             else:
-                print(f"[Camera] wrist_camera mounted on RealSense link '{mount_name}'")
+                print(
+                    f"[Camera] wrist_camera mounted on RealSense link '{mount_name}' "
+                    f"fov={WRIST_CAMERA_FOV} p={WRIST_CAMERA_LOCAL_P} q={WRIST_CAMERA_LOCAL_Q}"
+                )
                 configs.append(CameraConfig(
                     uid=WRIST_CAMERA_NAME,
                     pose=sapien.Pose(p=WRIST_CAMERA_LOCAL_P, q=WRIST_CAMERA_LOCAL_Q),
