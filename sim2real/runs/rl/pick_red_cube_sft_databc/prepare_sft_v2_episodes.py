@@ -6,6 +6,8 @@ V2 differences vs prepare_sft_episodes.py:
   - per-step 7D proprio (6 arm qpos + gripper closure) is carried through
   - gripper action is quantized to the discrete openness levels {0.0, 0.2, ..., 1.0}
     (1 = fully open, 0 = fully closed) used by the RCLevelHandController
+  - actions are chunked at a fixed stride and near-stationary chunks are dropped
+    (see chunk_fixed_stride)
 
 Input episodes are the output of render_bg_variants.py (or the raw recollected
 episodes, which already carry image/image_wrist/action/proprio/info).
@@ -30,6 +32,10 @@ from openreal2sim.simulation.maniskill.scripts.rc5_unified_dense_episode import 
 
 MAX_STEPS_PER_CHUNK = int(os.environ.get("RLVLA_MAX_STEPS_PER_CHUNK", "4"))
 MAX_TRANSLATION_NORM = 0.04
+# Chunks translating less than this are dropped unless they carry a gripper
+# transition. 1 mm is well under the 256-bin resolution of the action tokenizer
+# (~0.15 mm on x, ~0.06 mm on z), so nothing informative is discarded.
+MIN_CHUNK_TRANSLATION = float(os.environ.get("RLVLA_MIN_CHUNK_TRANSLATION", "0.001"))
 TRANSLATION_EPS = 1e-6
 GRIPPER_LEVELS = 5  # openness levels are round(o * 5) / 5 -> {0.0, 0.2, ..., 1.0}
 EXPECTED_SCENE_HWC = (480, 640, 3)
@@ -43,13 +49,31 @@ def quantize_gripper_levels(actions: np.ndarray) -> np.ndarray:
     return out
 
 
-def compress_same_gripper_translations(
+def chunk_fixed_stride(
     actions: np.ndarray,
     scene_images: list[np.ndarray],
     wrist_images: list[np.ndarray],
     proprio: np.ndarray,
     infos: list[dict],
 ) -> tuple[np.ndarray, list[np.ndarray], list[np.ndarray], np.ndarray, list[dict]]:
+    """Sum a fixed number of consecutive frames into one action label.
+
+    Chunk length is a function of the timestep alone; it breaks only on a
+    gripper-level change or the end of the episode. The earlier rule also cut a
+    chunk short whenever a later frame reversed sign on any axis, which made the
+    label depend on future frames -- 21% of chunks were truncated that way, so
+    one observation could map to a 1-, 2-, 3- or 4-frame sum and the target was
+    not a function of the observation.
+
+    Chunks that barely translate are dropped unless they carry a gripper
+    transition. Keeping them left a quarter of the x/y labels and a third of the
+    z labels exactly zero, making the zero bin the single most likely token;
+    greedy decoding then collapsed onto it at rollout time and the arm stalled.
+
+    Observation (image/proprio) is taken from the first frame of the chunk and
+    `info` from the last, so the label is the motion that follows the frame the
+    policy sees.
+    """
     n = int(actions.shape[0])
     if n == 0:
         return actions, scene_images, wrist_images, proprio, infos
@@ -59,33 +83,38 @@ def compress_same_gripper_translations(
     out_wrist: list[np.ndarray] = []
     out_proprio: list[np.ndarray] = []
     out_infos: list[dict] = []
+    n_chunks = 0
+    n_dropped = 0
+    n_clamped = 0
+    prev_gripper: float | None = None
+
     idx = 0
     while idx < n:
-        chunk = np.asarray(actions[idx], dtype=np.float32).copy()
         start = idx
+        chunk = np.asarray(actions[start], dtype=np.float32).copy()
         idx += 1
-        chunk_len = 1
-        while idx < n:
+        while idx < n and (idx - start) < MAX_STEPS_PER_CHUNK:
             nxt = np.asarray(actions[idx], dtype=np.float32)
             if abs(float(nxt[6]) - float(chunk[6])) > TRANSLATION_EPS:
                 break
-            if chunk_len >= MAX_STEPS_PER_CHUNK:
-                break
-            merged = chunk.copy()
-            merged[:3] = chunk[:3] + nxt[:3]
-            if float(np.linalg.norm(merged[:3])) > MAX_TRANSLATION_NORM:
-                break
-            for axis in range(3):
-                cur = float(chunk[axis])
-                nxt_v = float(nxt[axis])
-                if abs(cur) > TRANSLATION_EPS and abs(nxt_v) > TRANSLATION_EPS and np.sign(cur) != np.sign(nxt_v):
-                    break
-            else:
-                chunk = merged
-                idx += 1
-                chunk_len += 1
-                continue
-            break
+            chunk[:3] = chunk[:3] + nxt[:3]
+            idx += 1
+        n_chunks += 1
+
+        # Inert on this data (4 frames cap out around 0.024 m) but keeps the
+        # bound a hard guarantee without making chunk length content-dependent.
+        norm = float(np.linalg.norm(chunk[:3]))
+        if norm > MAX_TRANSLATION_NORM:
+            chunk[:3] *= MAX_TRANSLATION_NORM / norm
+            norm = MAX_TRANSLATION_NORM
+            n_clamped += 1
+
+        gripper = float(chunk[6])
+        gripper_event = prev_gripper is None or abs(gripper - prev_gripper) > TRANSLATION_EPS
+        if norm < MIN_CHUNK_TRANSLATION and not gripper_event:
+            n_dropped += 1
+            continue
+
         out_actions.append(chunk)
         out_scene.append(scene_images[start])
         out_wrist.append(wrist_images[start])
@@ -93,6 +122,12 @@ def compress_same_gripper_translations(
         last_info = dict(infos[idx - 1]) if isinstance(infos[idx - 1], dict) else {"success": False}
         last_info["success"] = bool(last_info.get("success", False))
         out_infos.append(last_info)
+        prev_gripper = gripper
+
+    print(
+        f"  chunks={n_chunks} kept={len(out_actions)} dropped_noop={n_dropped} clamped={n_clamped}",
+        flush=True,
+    )
     return (
         np.stack(out_actions, axis=0).astype(np.float32),
         out_scene,
@@ -140,7 +175,7 @@ def convert_episode(src_path: Path) -> dict:
     infos = list(payload.get("info") or [])
     if len(infos) != len(actions):
         raise ValueError(f"{src_path.name}: info length {len(infos)} != action {len(actions)}")
-    actions, scene_images, wrist_images, proprio, infos = compress_same_gripper_translations(
+    actions, scene_images, wrist_images, proprio, infos = chunk_fixed_stride(
         actions, scene_images, wrist_images, proprio, infos
     )
     instruction = payload.get("instruction", "Pick red cube")
@@ -192,6 +227,8 @@ def main() -> None:
         "src_dir": str(src_dir),
         "dest_dir": str(dest_dir),
         "max_steps_per_chunk": MAX_STEPS_PER_CHUNK,
+        "min_chunk_translation": MIN_CHUNK_TRANSLATION,
+        "chunking": "fixed_stride",
     }
     (dest_dir / "sft_episode_stats.json").write_text(json.dumps(stats, indent=2) + "\n")
     print(json.dumps(stats, indent=2), flush=True)

@@ -60,11 +60,18 @@ export CUDA_VISIBLE_DEVICES=0
 export PYTHONUNBUFFERED=1
 export WANDB_MODE=offline
 export WANDB_DIR="${RUN_DIR}"
+export DATABC_CKPT_DIR="${DATABC_CKPT_DIR:-${RUN_DIR}/ckpts}"
+mkdir -p "${DATABC_CKPT_DIR}"
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export TF_FORCE_GPU_ALLOW_GROWTH=true
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export TOKENIZERS_PARALLELISM=false
 export VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json
+# rl_gym.py defaults to ..._left_image_metric (release.v4, scaled s=1.0915 about the camera
+# centre), which is out of distribution for SFT data rendered on the unscaled scene:
+# DataBC_v6_metric_ep120 held 0.0% grasp / 0.0% SR for 7 updates where left_image gives
+# 25.0% / 10.4%. Pin the source scene.
+export OPENREAL2SIM_RL_SCENE_KEY="${OPENREAL2SIM_RL_SCENE_KEY:-airy_table_scene14sep26_left_image}"
 # Do not inherit PYTHONPATH: a leading sim2real/ entry shadows ManiSkill and drops RC5.
 export PYTHONPATH="${REPO}/SimplerEnv:${REPO}/ManiSkill:${REPO}/real2sim:${REPO}/openvla"
 
@@ -82,7 +89,7 @@ echo "DataBC_V2 start $(date -Is) name=${DATABC_NAME} vla_load_path=${SFT_LORA_P
   --vla_proprio_dim=7 \
   --seed=0 \
   --num_envs="${NUM_ENVS:-64}" \
-  --episode_len="${EPISODE_LEN:-80}" \
+  --episode_len="${EPISODE_LEN:-160}" \
   --store-rollouts-on-cpu \
   --use_wrist_camera \
   --vla_gradient_checkpointing \
@@ -96,11 +103,15 @@ echo "DataBC_V2 start $(date -Is) name=${DATABC_NAME} vla_load_path=${SFT_LORA_P
   --bc_to_ref_hold_steps="${BC_TO_REF_HOLD_STEPS:-200000}" \
   --bc_to_ref_decay_steps="${BC_TO_REF_DECAY_STEPS:-600000}" \
   --bc_to_ref_min_coef="${BC_TO_REF_MIN_COEF:-0.3}" \
-  --alg_entropy_coef="${ALG_ENTROPY_COEF:-0.2}" \
+  --alg_entropy_coef="${ALG_ENTROPY_COEF:-0.0}" \
   --alg_entropy_target="${ALG_ENTROPY_TARGET:-1.0}" \
-  --alg_ppo_epoch="${ALG_PPO_EPOCH:-3}" \
+  --alg_ppo_epoch="${ALG_PPO_EPOCH:-1}" \
   --alg_vf_coef="${ALG_VF_COEF:-0.5}" \
-  --freeze_actor_updates="${FREEZE_ACTOR_UPDATES:-20}" \
+  --freeze_actor_updates="${FREEZE_ACTOR_UPDATES:-0}" \
+  --alg_target_kl="${ALG_TARGET_KL:-0.05}" \
+  --vla_lr="${VLA_LR:-2e-5}" \
+  --buffer_minibatch="${BUFFER_MINIBATCH:-16}" \
+  --alg_gradient_accum="${ALG_GRADIENT_ACCUM:-10}" \
   --vla_temperature="${VLA_TEMPERATURE:-1.0}" \
   --vla_temperature_final="${VLA_TEMPERATURE_FINAL:-0.6}" \
   --vla_temperature_anneal_steps="${VLA_TEMPERATURE_ANNEAL_STEPS:-200000}" \
@@ -112,6 +123,12 @@ echo "DataBC_V2 start $(date -Is) name=${DATABC_NAME} vla_load_path=${SFT_LORA_P
   --reward_lift_height=0.05 \
   --reward_yeet_height="${REWARD_YEET_HEIGHT:-0.15}" \
   --reward_yeet_coef="${REWARD_YEET_COEF:-2.0}" \
+  --reward_yeet_clip="${REWARD_YEET_CLIP:-0.1}" \
+  --escape_height="${ESCAPE_HEIGHT:-0.5}" \
+  --escape_below="${ESCAPE_BELOW:-0.05}" \
+  --escape_dist="${ESCAPE_DIST:-1.0}" \
+  --reward_escape_penalty="${REWARD_ESCAPE_PENALTY:-1.0}" \
+  --reward_scale="${REWARD_SCALE:-10.0}" \
   --success_terminate_steps="${SUCCESS_TERMINATE_STEPS:-5}" \
   --sticky_gripper_steps "${STICKY_GRIPPER_STEPS:-0}" \
   --max_ee_delta=0.05 \

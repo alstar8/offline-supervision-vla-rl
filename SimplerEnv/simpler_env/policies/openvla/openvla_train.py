@@ -108,17 +108,7 @@ class OpenVLAPolicy:
             self.vla = PeftModel.from_pretrained(self.vla, self.args.vla_load_path, is_trainable=True)
             print(f"VLA load: {self.args.vla_load_path}")
 
-            if self.args.vla_unnorm_key not in self.vla.base_model.norm_stats:
-                path = Path(self.args.vla_load_path) / "dataset_statistics.json"
-                ds = json.load(open(path, "r"))
-                self.vla.base_model.norm_stats[self.args.vla_unnorm_key] = ds[self.args.vla_unnorm_key]
-            if self.vla_model_variant == "v2":
-                stats = self.vla.base_model.norm_stats.get(self.args.vla_unnorm_key, {})
-                if "proprio" not in stats:
-                    raise ValueError(
-                        f"OpenVLA_V2 requires proprio q99 stats under unnorm key "
-                        f"'{self.args.vla_unnorm_key}' in {self.args.vla_load_path}/dataset_statistics.json."
-                    )
+        self._ensure_unnorm_stats()
 
         # set value head trainable
         for name, param in self.vla.named_parameters():
@@ -256,6 +246,42 @@ class OpenVLAPolicy:
             self.args.vla_path,
             **base_kwargs,
         )
+
+    def _ensure_unnorm_stats(self) -> None:
+        key = self.args.vla_unnorm_key
+        candidates = []
+        extra = getattr(self.args, "vla_unnorm_stats_path", "") or ""
+        if extra:
+            candidates.append(Path(extra))
+        if self.args.vla_load_path:
+            candidates.append(Path(self.args.vla_load_path) / "dataset_statistics.json")
+        if key not in self.vla.base_model.norm_stats:
+            loaded = False
+            for path in candidates:
+                if not path.exists():
+                    continue
+                ds = json.load(open(path, "r"))
+                if key in ds:
+                    self.vla.base_model.norm_stats[key] = ds[key]
+                    loaded = True
+                    print(f"Unnorm stats load: {path} key={key}")
+                    break
+                if isinstance(ds.get("action"), dict) and "q01" in ds["action"]:
+                    self.vla.base_model.norm_stats[key] = ds
+                    loaded = True
+                    print(f"Unnorm stats load: {path} as key={key}")
+                    break
+            if not loaded:
+                raise ValueError(
+                    f"Unnorm key '{key}' missing from model norm_stats and no dataset_statistics.json "
+                    f"was found in {candidates}."
+                )
+        if self.vla_model_variant == "v2":
+            stats = self.vla.base_model.norm_stats.get(key, {})
+            if "proprio" not in stats:
+                raise ValueError(
+                    f"OpenVLA_V2 requires proprio q99 stats under unnorm key '{key}'."
+                )
 
     def _setup_optimizer(self):
         self.params_vh = [p for n, p in self.vla.named_parameters() if "value_head" in n and p.requires_grad]

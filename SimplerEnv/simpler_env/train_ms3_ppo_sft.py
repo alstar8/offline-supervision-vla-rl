@@ -107,6 +107,43 @@ def allreduce_mean_metrics(metrics: dict) -> dict:
     return {k: sum(d.get(k, 0.0) for d in gathered) / world for k in keys}
 
 
+def fmt_metric(infos: dict, key: str, label: str, prec: int = 4) -> str:
+    """Format one train metric for a console line, tolerating absence.
+
+    Metrics arrive prefixed with `train/` but the same keys are also used
+    unprefixed in some paths, so both are accepted.
+    """
+    value = infos.get(f"train/{key}", infos.get(key))
+    return f"{label}={value:.{prec}f}" if value is not None else f"{label}=n/a"
+
+
+def safe_wandb_log(payload: dict, step: int) -> None:
+    """Log to W&B without letting a missing/deleted run dir kill training."""
+    try:
+        if wandb.run is None:
+            print("[W&B] skip log: no active run", flush=True)
+            return
+        run_dir = Path(getattr(wandb.run, "dir", "") or "")
+        if run_dir and not run_dir.exists():
+            print(f"[W&B] skip log: run dir missing ({run_dir})", flush=True)
+            return
+        wandb.log(python_float_metrics(payload), step=step)
+    except Exception as exc:
+        print(f"[W&B] log failed: {type(exc).__name__}: {exc}", flush=True)
+
+
+def resolve_ckpt_dir(wandb_run_dir: Path) -> Path:
+    """Keep LoRA saves outside wandb/, which is gitignored and easy to wipe."""
+    env_dir = os.environ.get("DATABC_CKPT_DIR", "").strip()
+    if env_dir:
+        path = Path(env_dir)
+    else:
+        wandb_dir = os.environ.get("WANDB_DIR", "").strip()
+        path = Path(wandb_dir) / "ckpts" if wandb_dir else wandb_run_dir.resolve().parent / "glob"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def python_float_metrics(metrics: dict) -> dict:
     out = {}
     for key, value in metrics.items():
@@ -173,6 +210,7 @@ class Args:
     vla_path: str = "openvla/openvla-7b"
     vla_unnorm_key: str = "bridge_orig"
     vla_load_path: str = ""
+    vla_unnorm_stats_path: str = ""
     vla_model_variant: str = "v1"  # v1: single composited image; v2: separate scene+wrist images + 7D proprio
     vla_proprio_dim: int = 7
     vla_wrist_dim: Tuple[int, int, int] = (224, 168, 3)
@@ -200,6 +238,14 @@ class Args:
     alg_gradient_accum: int = 20
     alg_ppo_epoch: int = 1
     ppo_clip: float = 0.2
+    # Abandon the remaining PPO epochs once the policy has moved this far from
+    # the behaviour policy (Schulman k3 estimate). Without it the epoch loop runs
+    # to completion unconditionally: at 448 minibatches and 20-step accumulation
+    # that is ~22 optimizer steps per epoch with only the clip bounding them,
+    # which measured approx_kl=1.16 and clipfrac=0.55 on the first live update --
+    # roughly 20x a healthy PPO step, and the policy does not survive it.
+    # 0 disables the check.
+    alg_target_kl: float = 0.0
     alg_entropy_coef: float = 0.0
     alg_entropy_target: float = 0.0
     alg_entropy_overshoot_coef: float = 0.0
@@ -225,8 +271,25 @@ class Args:
     reward_yeet_coef: float = 0.0
     reward_yeet_grasp_only: bool = False
     reward_yeet_warmup_steps: int = 0
+    reward_yeet_clip: float = 0.0
+    # Multiplies the final per-step reward. Advantages are renormalized to unit variance
+    # in compute_returns_ppo, so this does NOT change the policy gradient -- it only
+    # rescales the critic's target. The value head emits noise of RMS ~0.3 while returns
+    # average 0.024, so it is mis-scaled by an order of magnitude and cannot fit.
+    reward_scale: float = 1.0
     success_terminate_steps: int = 0
     sticky_gripper_steps: int = 0
+    # Absorb an env once its object leaves the reachable workspace. Physics diverges
+    # after ~50 steps in this scene (objects drop through the table or get flung
+    # metres away), and the resulting reward outliers dominate the critic.
+    escape_height: float = 0.0
+    escape_below: float = 0.0
+    escape_dist: float = 0.0
+    # One-time cost charged the step an env escapes. Without it, clipping the yeet
+    # penalty makes flinging profitable: grasp+lift pays ~+0.7 and the clipped yeet
+    # penalty only takes 0.2 back. Keep this near the +1.0 success term so returns
+    # stay bounded and the critic stays fittable.
+    reward_escape_penalty: float = 0.0
 
     # offline sft dataset
     sft_data_root_dir: Path = Path("datasets/open-x-embodiment")
@@ -409,7 +472,9 @@ class OpenVLAPPOSFT:
         overshoot = float(getattr(self.args, "alg_entropy_overshoot_coef", 0.0) or 0.0)
         if target > 0.0:
             error = entropy_mean - entropy_mean.new_tensor(target)
-            term = coef * error
+            # Quadratic so the gradient flips sign at the target: a linear term would
+            # push entropy down even when it is already below target.
+            term = coef * error.pow(2)
             if overshoot > 0.0:
                 term = term + overshoot * torch.relu(error)
             return term, {
@@ -560,8 +625,27 @@ class OpenVLAPPOSFT:
                 entropy_overshoot_coef=float(self.args.alg_entropy_overshoot_coef),
             )
             ratio = torch.ones_like(old_logprob)
+            clipfrac = values.new_zeros(())
+            approx_kl = values.new_zeros(())
         else:
             ratio = torch.exp(logprob - old_logprob)
+            # Fraction of tokens whose importance ratio left the trust region, and
+            # the old->new policy KL. Mean ratio hovers near 1 whether the update is
+            # doing nothing or making large offsetting moves, so it cannot tell the
+            # two apart; these can. Near-zero clipfrac with near-zero approx_kl means
+            # the actor is barely moving, while a sustained clipfrac above ~0.3 means
+            # the clip is the only thing bounding the step.
+            clipfrac = self._masked_mean(
+                ((ratio - 1.0).abs() > self.ppo_clip).to(**self.tpdv).mean(dim=-1, keepdim=True),
+                valid,
+            )
+            # Schulman k3 estimator: lower variance than mean(logratio) and
+            # non-negative, so a broken update shows up as a spike rather than as
+            # cancellation around zero.
+            approx_kl = self._masked_mean(
+                ((ratio - 1.0) - (logprob - old_logprob)).mean(dim=-1, keepdim=True),
+                valid,
+            )
             surr1 = ratio * advantages
             surr2 = torch.clamp(ratio, 1 - self.ppo_clip, 1 + self.ppo_clip) * advantages
             ppo_policy_loss = self._masked_mean(-torch.min(surr1, surr2).sum(dim=-1, keepdim=True), valid)
@@ -662,6 +746,14 @@ class OpenVLAPPOSFT:
             entropy_overshoot_coef=float(entropy_info.get("entropy_overshoot_coef", 0.0)),
             ratio=ratio.mean().item(),
             ratio_median=ratio.median().item(),
+            clipfrac=float(clipfrac.detach().item()),
+            approx_kl=float(approx_kl.detach().item()),
+            # Advantage scale decides whether the policy gradient can compete with
+            # the KL/BC terms at all; if these collapse toward zero the reward is
+            # not discriminating between rollouts regardless of PPO settings.
+            adv_mean=advantages.mean().item(),
+            adv_std=advantages.std().item() if advantages.numel() > 1 else 0.0,
+            adv_abs_mean=advantages.abs().mean().item(),
             ratio_2=1.0 if self.freeze_actor_updates else (logprob - old_logprob).mean().exp().item(),
             value_clip_ratio=value_clip_ratio.item(),
             value_old_mean=value_preds.mean().item(),
@@ -703,7 +795,14 @@ class OpenVLAPPOSFT:
         buffer.compute_returns_ppo()
         minibatch_count = buffer.get_minibatch_count()
 
+        target_kl = float(getattr(self.args, "alg_target_kl", 0.0) or 0.0)
+        kl_window: list[float] = []
+        opt_steps = 0
+        stop_early = False
+
         for _ in range(self.args.alg_ppo_epoch):
+            if stop_early:
+                break
             data_generator = buffer.feed_forward_generator()
             for idx, batch in tqdm(
                 enumerate(data_generator),
@@ -720,7 +819,33 @@ class OpenVLAPPOSFT:
                 for key, value in info.items():
                     train_info[key].append(value)
 
+                if target_kl <= 0.0 or self.freeze_actor_updates:
+                    continue
+                kl_window.append(info.get("approx_kl", 0.0))
+                # Decide only on optimizer-step boundaries; train_ppo_step reports
+                # grad_norm exactly when it stepped.
+                if "grad_norm" not in info:
+                    continue
+                opt_steps += 1
+                window_kl = float(np.mean(kl_window)) if kl_window else 0.0
+                kl_window.clear()
+                # Every rank has to reach the same verdict. A rank that kept going
+                # would block forever in the next allreduce_grads waiting on ranks
+                # that had already left the loop, so the decision is reduced across
+                # the group before it is acted on.
+                if dist.is_initialized() and dist_world() > 1:
+                    reduced = torch.tensor(
+                        [window_kl], dtype=torch.float32, device=self.tpdv["device"]
+                    )
+                    dist.all_reduce(reduced, op=dist.ReduceOp.MAX)
+                    window_kl = float(reduced.item())
+                if window_kl > target_kl:
+                    stop_early = True
+                    break
+
         out = {key: np.mean(value) for key, value in train_info.items()}
+        out["kl_early_stop"] = 1.0 if stop_early else 0.0
+        out["opt_steps"] = float(opt_steps)
         out["grad_align_measurements"] = float(align_count)
         if align_count > 0:
             out["grad_align_conflict_fraction"] = align_conflict_sum / align_count
@@ -760,9 +885,9 @@ class Runner:
                 use_wandb=self.args.wandb,
             )
             self.save_dir = Path(wandb.run.dir)
-            self.glob_dir = Path(wandb.run.dir) / ".." / "glob"
-            self.glob_dir.mkdir(parents=True, exist_ok=True)
+            self.glob_dir = resolve_ckpt_dir(self.save_dir)
             yaml.dump(self.args_for_logging, open(self.glob_dir / "config.yaml", "w"))
+            print(f"Checkpoints will be saved to {self.glob_dir.resolve()}", flush=True)
             self._log_args()
         else:
             self.save_dir = Path(f"/tmp/databc_rank{dist_rank()}")
@@ -1317,9 +1442,6 @@ class Runner:
             if ddp:
                 broadcast_trainable(self.policy.params_vla + self.policy.params_vh)
 
-            if dist_is_main():
-                wandb.log(python_float_metrics(infos), step=steps)
-
             elapsed_time = time.time() - ep_time
             total_elapsed = time.time() - train_start
             remaining_steps = max(0, self.args.steps_max - steps)
@@ -1327,12 +1449,13 @@ class Runner:
             steps_per_sec = run_steps / total_elapsed if total_elapsed > 0 else 0.0
             eta = remaining_steps / steps_per_sec if steps_per_sec > 0 else 0.0
             if dist_is_main():
-                print("-" * 60)
+                print("-" * 60, flush=True)
                 print(
                     f"{self.args.name}: ep {episode:0>4d} | steps {steps} | "
                     f"e {elapsed_time:.2f}s | "
                     f"total {self._format_seconds(total_elapsed)} | "
-                    f"eta {self._format_seconds(eta)}"
+                    f"eta {self._format_seconds(eta)}",
+                    flush=True,
                 )
                 reward_mean = infos.get("buffer/reward_mean")
                 returns_mean = infos.get("train/returns_mean", infos.get("returns_mean"))
@@ -1345,7 +1468,7 @@ class Runner:
                 vf_coef = infos.get("train/vf_coef", infos.get("vf_coef"))
                 reward_text = f"{reward_mean:.6f}" if reward_mean is not None else "n/a"
                 returns_text = f"{returns_mean:.6f}" if returns_mean is not None else "n/a"
-                print(f"reward_mean={reward_text} | returns_mean={returns_text}")
+                print(f"reward_mean={reward_text} | returns_mean={returns_text}", flush=True)
                 critic_parts = [
                     f"value_loss={value_loss:.6f}" if value_loss is not None else "value_loss=n/a",
                     f"values_mean={values_mean:.6f}" if values_mean is not None else "values_mean=n/a",
@@ -1355,7 +1478,35 @@ class Runner:
                     f"vf_coef={vf_coef:.3f}" if vf_coef is not None else "vf_coef=n/a",
                     "actor=frozen" if float(actor_frozen or 0.0) >= 0.5 else "actor=live",
                 ]
-                print("critic: " + " | ".join(critic_parts))
+                print("critic: " + " | ".join(critic_parts), flush=True)
+
+                # Actor-side counterpart to the critic line. These were already
+                # computed and sent to W&B, but W&B runs offline here, so a run had
+                # to be post-mortemed to answer basic questions like "did the actor
+                # move at all". Printing them makes the loop readable live.
+                print(
+                    "actor: " + " | ".join([
+                        fmt_metric(infos, "ppo_policy_loss_raw", "ppo_loss", 6),
+                        fmt_metric(infos, "grad_norm", "grad_norm"),
+                        fmt_metric(infos, "entropy_loss", "entropy"),
+                        fmt_metric(infos, "ratio", "ratio"),
+                        fmt_metric(infos, "clipfrac", "clipfrac"),
+                        fmt_metric(infos, "approx_kl", "approx_kl", 6),
+                        fmt_metric(infos, "adv_std", "adv_std", 6),
+                        fmt_metric(infos, "kl_to_ref", "kl_ref", 6),
+                        fmt_metric(infos, "bc_to_ref_loss", "bc", 6),
+                        fmt_metric(infos, "opt_steps", "opt_steps", 0),
+                        fmt_metric(infos, "kl_early_stop", "kl_stop", 0),
+                    ]),
+                    flush=True,
+                )
+                rollout_sr = infos.get("env/success", env_metrics.get("env/success"))
+                print(
+                    f"rollout: success={rollout_sr:.4f}" if rollout_sr is not None
+                    else "rollout: success=n/a",
+                    flush=True,
+                )
+                safe_wandb_log(infos, step=steps)
 
             rollout_success = float(infos.get("env/success", env_metrics.get("env/success", 0.0)))
             if self.args.stop_success_rate > 0.0 and rollout_success >= self.args.stop_success_rate:
@@ -1382,12 +1533,12 @@ class Runner:
                 print(f"Evaluating at {steps}")
                 sval_stats = self.eval(obj_set="train")
                 sval_stats = {f"eval/{k}": v for k, v in sval_stats.items()}
-                wandb.log(python_float_metrics(sval_stats), step=steps)
+                safe_wandb_log(sval_stats, step=steps)
 
                 if not skip_ood_eval:
                     sval_stats = self.eval(obj_set="test")
                     sval_stats = {f"eval/{k}_ood": v for k, v in sval_stats.items()}
-                    wandb.log(python_float_metrics(sval_stats), step=steps)
+                    safe_wandb_log(sval_stats, step=steps)
 
             do_save = (
                 episode % self.args.interval_save == self.args.interval_save - 1
@@ -1395,7 +1546,7 @@ class Runner:
                 or reached_success_stop
             )
             if do_save and dist_is_main():
-                print(f"Saving model at {steps}")
+                print(f"Saving model at {steps} -> {self.glob_dir / f'steps_{episode:0>4d}'}", flush=True)
                 save_path = self.glob_dir / f"steps_{episode:0>4d}"
                 self.policy.save(save_path)
                 if not ddp:

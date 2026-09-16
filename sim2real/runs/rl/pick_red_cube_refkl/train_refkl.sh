@@ -18,6 +18,9 @@ RUN_DIR="${REPO}/sim2real/runs/rl/pick_red_cube_refkl"
 SFT_LORA_PATH="${SFT_LORA_PATH:-${REPO}/openvla/checkpoints/sft/steps_1000-no_aug/lora_000500}"
 # Student LoRA: SFT for a fresh run, or a PPO checkpoint to resume.
 LOAD_PATH="${REFKL_LOAD_PATH:-${SFT_LORA_PATH}}"
+if [[ "${PPO_FROM_WARMUP:-0}" == "1" ]]; then
+  LOAD_PATH=""
+fi
 NUM_ENVS="${NUM_ENVS:-64}"
 SEED="${SEED:-0}"
 NAME="${NAME:-RefKL_pick_red_cube_8gpu}"
@@ -80,13 +83,41 @@ fi
 if [[ -n "${SFT_ACTION_DIM_WEIGHTS:-}" ]]; then
   SFT_EXTRA_ARGS+=(--sft_action_dim_weights="${SFT_ACTION_DIM_WEIGHTS}")
 fi
-if [[ ! -d "${LOAD_PATH}" ]]; then
-  echo "missing student checkpoint directory: ${LOAD_PATH}" >&2
+LOAD_ARGS=()
+if [[ -n "${LOAD_PATH}" ]]; then
+  if [[ ! -d "${LOAD_PATH}" ]]; then
+    echo "missing student checkpoint directory: ${LOAD_PATH}" >&2
+    exit 1
+  fi
+  if [[ ! -f "${LOAD_PATH}/dataset_statistics.json" ]]; then
+    echo "missing dataset_statistics.json in ${LOAD_PATH}" >&2
+    exit 1
+  fi
+  LOAD_ARGS+=(--vla_load_path="${LOAD_PATH}")
+fi
+if [[ -n "${VLA_UNNORM_STATS_PATH:-}" ]]; then
+  if [[ ! -f "${VLA_UNNORM_STATS_PATH}" ]]; then
+    echo "missing unnorm stats file: ${VLA_UNNORM_STATS_PATH}" >&2
+    exit 1
+  fi
+  SFT_EXTRA_ARGS+=(--vla_unnorm_stats_path="${VLA_UNNORM_STATS_PATH}")
+elif [[ -z "${LOAD_PATH}" ]]; then
+  echo "PPO-from-warmup requires VLA_UNNORM_STATS_PATH when REFKL_LOAD_PATH is empty" >&2
   exit 1
 fi
-if [[ ! -f "${LOAD_PATH}/dataset_statistics.json" ]]; then
-  echo "missing dataset_statistics.json in ${LOAD_PATH}" >&2
-  exit 1
+BC_TO_REF_ENABLED="${BC_TO_REF_ENABLED:-1}"
+BC_ARGS=()
+if [[ "${BC_TO_REF_ENABLED}" == "1" ]]; then
+  BC_ARGS+=(--bc_to_ref_enabled)
+  BC_ARGS+=(--no_sft_image_aug)
+  BC_ARGS+=(--sft_data_root_dir="${SFT_DATA_ROOT_DIR:-../datasets}")
+  BC_ARGS+=(--sft_dataset_name="${SFT_DATASET_NAME}")
+  BC_ARGS+=(--sft_batch_size="${SFT_BATCH_SIZE}")
+  BC_ARGS+=(--sft_shuffle_buffer_size="${SFT_SHUFFLE_BUFFER_SIZE:-2000}")
+  BC_ARGS+=(--bc_to_ref_coef="${BC_TO_REF_COEF:-0.6}")
+  BC_ARGS+=(--bc_to_ref_hold_steps="${BC_TO_REF_HOLD_STEPS:-200000}")
+  BC_ARGS+=(--bc_to_ref_decay_steps="${BC_TO_REF_DECAY_STEPS:-800000}")
+  BC_ARGS+=(--bc_to_ref_min_coef="${BC_TO_REF_MIN_COEF:-0.15}")
 fi
 
 JOB_DIR="${REFKL_JOB_DIR:-${RUN_DIR}/ddp_sft}"
@@ -105,6 +136,11 @@ export TOKENIZERS_PARALLELISM=false
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-4}"
 export VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json
+# Keep RL on the same scene the SFT data was rendered from. release.v4 switched
+# the env default to the metric copy (source rescaled by 1.0915); training the
+# student there while its teacher and BC data come from the unscaled scene would
+# put a 9% geometry mismatch between the two.
+export OPENREAL2SIM_RL_SCENE_KEY="${OPENREAL2SIM_RL_SCENE_KEY:-airy_table_scene14sep26_left_image}"
 export PYTHONPATH="${REPO}/SimplerEnv:${REPO}/ManiSkill:${REPO}/real2sim:${REPO}/openvla"
 export REFKL_GPUS
 # train_ms3_ppo_sft.py reads DATABC_* for stagger / NCCL timeout.
@@ -118,7 +154,7 @@ unset TORCH_NCCL_BLOCKING_WAIT || true
 
 cd "${REPO}/SimplerEnv"
 
-echo "RefKL DDP start $(date -Is) gpus=${REFKL_GPUS} nproc=${NPROC} seed=${SEED} num_envs=${NUM_ENVS} variant=${VLA_MODEL_VARIANT} unnorm=${VLA_UNNORM_KEY} dataset=${SFT_DATASET_NAME} sft_data_root=${SFT_DATA_ROOT_DIR:-../datasets} student=${LOAD_PATH} teacher=${SFT_LORA_PATH} kl_enabled=${KL_TO_REF_ENABLED} entropy_coef=${ENTROPY_COEF} entropy_target=${ENTROPY_TARGET} entropy_overshoot=${ENTROPY_OVERSHOOT} resume_ep=${RESUME_EP}"
+echo "RefKL DDP start $(date -Is) gpus=${REFKL_GPUS} nproc=${NPROC} seed=${SEED} num_envs=${NUM_ENVS} variant=${VLA_MODEL_VARIANT} unnorm=${VLA_UNNORM_KEY} dataset=${SFT_DATASET_NAME} sft_data_root=${SFT_DATA_ROOT_DIR:-../datasets} student=${LOAD_PATH:-warmup} teacher=${SFT_LORA_PATH} kl_enabled=${KL_TO_REF_ENABLED} bc_enabled=${BC_TO_REF_ENABLED} entropy_coef=${ENTROPY_COEF} entropy_target=${ENTROPY_TARGET} entropy_overshoot=${ENTROPY_OVERSHOOT} resume_ep=${RESUME_EP}"
 
 exec "${CONDA_BIN}/torchrun" \
   --standalone \
@@ -128,7 +164,7 @@ exec "${CONDA_BIN}/torchrun" \
   --name="${NAME}" \
   --env_id=OpenReal2Sim-v0 \
   --vla_path=gen-robot/openvla-7b-rlvla-warmup \
-  --vla_load_path="${LOAD_PATH}" \
+  "${LOAD_ARGS[@]}" \
   --vla_unnorm_key="${VLA_UNNORM_KEY}" \
   --vla_model_variant="${VLA_MODEL_VARIANT}" \
   --vla_proprio_dim="${VLA_PROPRIO_DIM}" \
@@ -139,23 +175,16 @@ exec "${CONDA_BIN}/torchrun" \
   --store-rollouts-on-cpu \
   --use_wrist_camera \
   --buffer_inferbatch="${BUFFER_INFERBATCH:-${NUM_ENVS}}" \
-  --bc_to_ref_enabled \
-  --no_sft_image_aug \
-  --sft_data_root_dir="${SFT_DATA_ROOT_DIR:-../datasets}" \
-  --sft_dataset_name="${SFT_DATASET_NAME}" \
-  --sft_batch_size="${SFT_BATCH_SIZE}" \
-  --sft_shuffle_buffer_size="${SFT_SHUFFLE_BUFFER_SIZE:-2000}" \
   --vla_gradient_checkpointing \
-  --bc_to_ref_coef="${BC_TO_REF_COEF:-0.6}" \
-  --bc_to_ref_hold_steps="${BC_TO_REF_HOLD_STEPS:-200000}" \
-  --bc_to_ref_decay_steps="${BC_TO_REF_DECAY_STEPS:-800000}" \
-  --bc_to_ref_min_coef="${BC_TO_REF_MIN_COEF:-0.15}" \
+  "${BC_ARGS[@]}" \
   "${KL_ARGS[@]}" \
   "${SFT_EXTRA_ARGS[@]}" \
   --alg_entropy_coef="${ENTROPY_COEF}" \
   --alg_entropy_target="${ENTROPY_TARGET}" \
   --alg_entropy_overshoot_coef="${ENTROPY_OVERSHOOT}" \
   --alg_ppo_epoch="${PPO_EPOCH}" \
+  --alg_target_kl="${ALG_TARGET_KL:-0.0}" \
+  --vla_lr="${VLA_LR:-1e-4}" \
   --freeze_actor_updates="${FREEZE_ACTOR_UPDATES:-3}" \
   --reward_max_lift_height=0 \
   --reward_reach_coef="${REWARD_REACH_COEF:-0.05}" \

@@ -307,6 +307,11 @@ def build_rl4vla_raw_episode_payload(
     preencoded_images: Sequence[Any] | None = None,
     wrist_images: Sequence[Any] | None = None,
     preencoded_wrist_images: Sequence[Any] | None = None,
+    robot_qpos: Sequence[Any] | None = None,
+    object_poses: Sequence[Any] | None = None,
+    object_names: Sequence[Any] | None = None,
+    pano_photo_idx: int | None = None,
+    pano_yaw: float | None = None,
     embedded_runtime_config_yaml: str | None = None,
     embedded_runtime_request_json: str | None = None,
 ) -> dict[str, Any]:
@@ -375,6 +380,29 @@ def build_rl4vla_raw_episode_payload(
             label="preencoded_wrist_images",
         )
         payload["camera_names"] = ["base_camera", "wrist_camera"]
+    if robot_qpos is not None:
+        qpos_array = np.asarray(robot_qpos, dtype=np.float32)
+        if qpos_array.ndim != 2 or qpos_array.shape[0] != len(images):
+            raise ValueError(
+                f"robot_qpos must form a float32 array [len(images), D], got {qpos_array.shape}"
+            )
+        payload["robot_qpos"] = qpos_array
+    if object_poses is not None:
+        poses_array = np.asarray(object_poses, dtype=np.float32)
+        if poses_array.ndim != 3 or poses_array.shape[0] != len(images) or poses_array.shape[2] != 7:
+            raise ValueError(
+                f"object_poses must form a float32 array [len(images), N, 7], got {poses_array.shape}"
+            )
+        payload["object_poses"] = poses_array
+        payload["object_names"] = [str(name) for name in (object_names or [])]
+        if len(payload["object_names"]) != poses_array.shape[1]:
+            raise ValueError(
+                f"object_names length {len(payload['object_names'])} != object_poses N={poses_array.shape[1]}"
+            )
+    if pano_photo_idx is not None:
+        payload["pano_photo_idx"] = int(pano_photo_idx)
+    if pano_yaw is not None:
+        payload["pano_yaw"] = float(pano_yaw)
     if resolved_embedded_runtime_config_yaml is not None:
         payload["embedded_runtime_config_yaml"] = resolved_embedded_runtime_config_yaml
     if resolved_embedded_runtime_request_json is not None:
@@ -397,6 +425,11 @@ def write_rl4vla_raw_episode_artifact(
     preencoded_images: Sequence[Any] | None = None,
     wrist_images: Sequence[Any] | None = None,
     preencoded_wrist_images: Sequence[Any] | None = None,
+    robot_qpos: Sequence[Any] | None = None,
+    object_poses: Sequence[Any] | None = None,
+    object_names: Sequence[Any] | None = None,
+    pano_photo_idx: int | None = None,
+    pano_yaw: float | None = None,
     embedded_runtime_config_yaml: str | None = None,
     embedded_runtime_request_json: str | None = None,
 ) -> Path:
@@ -412,6 +445,11 @@ def write_rl4vla_raw_episode_artifact(
         preencoded_images=preencoded_images,
         wrist_images=wrist_images,
         preencoded_wrist_images=preencoded_wrist_images,
+        robot_qpos=robot_qpos,
+        object_poses=object_poses,
+        object_names=object_names,
+        pano_photo_idx=pano_photo_idx,
+        pano_yaw=pano_yaw,
         embedded_runtime_config_yaml=embedded_runtime_config_yaml,
         embedded_runtime_request_json=embedded_runtime_request_json,
     )

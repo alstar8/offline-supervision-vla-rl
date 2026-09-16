@@ -28,16 +28,34 @@ IGNORE_INDEX = -100
 
 
 def prismatic_pixel_values_from_hwc(image_transform: ImageTransform, img) -> torch.Tensor:
-    """Convert HWC PIL/ndarray to the [C, H, W] tensor PrismaticImageProcessor.apply_transform expects."""
-    if not torch.is_tensor(img):
-        img = torch.from_numpy(np.asarray(img)).to(torch.uint8)
-    if img.ndim != 3:
-        raise ValueError(f"Expected image with 3 dims, got shape {tuple(img.shape)}")
-    if img.shape[-1] == 3:
-        img = img.permute(2, 0, 1)
-    img = img.unsqueeze(0)
-    out = image_transform(img)
-    return out.squeeze(0)
+    """Convert HWC PIL/ndarray/tensor to Prismatic `pixel_values`.
+
+    The in-repo `PrismaticImageProcessor.apply_transform` takes uint8 NCHW and
+    divides by 255. Hub `processing_prismatic` still calls torchvision
+    `ToTensor` and therefore needs a PIL image.
+    """
+    if torch.is_tensor(img):
+        tensor = img.detach().cpu()
+        if tensor.ndim == 3 and tensor.shape[-1] == 3:
+            tensor = tensor.permute(2, 0, 1)
+    else:
+        arr = np.asarray(img)
+        if arr.dtype != np.uint8:
+            arr = arr.astype(np.uint8)
+        tensor = torch.from_numpy(arr)
+        if tensor.ndim == 3 and tensor.shape[-1] == 3:
+            tensor = tensor.permute(2, 0, 1)
+    if tensor.ndim != 3:
+        raise ValueError(f"Expected image with 3 dims, got shape {tuple(tensor.shape)}")
+    tensor = tensor.to(torch.uint8)
+    try:
+        out = image_transform(tensor.unsqueeze(0))
+    except TypeError:
+        hwc = tensor.permute(1, 2, 0).numpy()
+        out = image_transform(Image.fromarray(hwc))
+    if torch.is_tensor(out) and out.ndim == 4:
+        out = out.squeeze(0)
+    return out
 
 
 @dataclass

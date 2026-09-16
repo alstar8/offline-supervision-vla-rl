@@ -5,6 +5,13 @@ __pycache__/
 .idea/
 .vscode/
 
+paper/
+
+# Local credentials.
+.env
+.env.*
+!.env.example
+
 /datasets/
 /ManiSkill/mp_collect/
 /openvla/checkpoints/
@@ -21,16 +28,20 @@ exp_local/
 
 openvla/models
 
-# Large local artifacts and checkpoints (GitHub 100MB file limit)
+# Checkpoints and other large binaries; GitHub rejects files over 100 MB.
 *.safetensors
-**/training_state.pt
+*.ckpt
+*.pt
+*.pth
 sim2real/assets/360_photos/
 
-# Episode dumps, wandb checkpoints, pids. Keep launch scripts, videos, SFT stats.
+# TFDS builds.
+**/datasets_v*/
+
+# Run trees are output: collected episodes, eval videos, per-shard stats, CSV
+# summaries, pids and lock files. Only the launchers and the analysis scripts
+# that produce them are source, so re-include those and nothing else.
 sim2real/runs/**
 !sim2real/runs/**/
 !sim2real/runs/**/*.sh
 !sim2real/runs/**/*.py
-!sim2real/runs/**/sft_episode_stats.json
-!sim2real/runs/**/videos/
-!sim2real/runs/**/videos/**

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,10 +20,7 @@ from openreal2sim.simulation.maniskill.utils.rl_placement import (
     DEFAULT_REACHABLE_BOUNDS_MAX_XY,
     DEFAULT_REACHABLE_BOUNDS_MIN_XY,
 )
-from openreal2sim.simulation.maniskill.utils.scene_loader import (
-    DEFAULT_SCENE_JSON_PATH,
-    SIM2REAL_REPO_ROOT,
-)
+from openreal2sim.simulation.maniskill.utils.scene_loader import SIM2REAL_REPO_ROOT
 
 PICK_RED_CUBE_INSTRUCTION = "Pick red cube"
 PICK_RED_CUBE_OBJECT_ID = "orange_cube_ext"
@@ -31,8 +29,25 @@ RC5_RL_CONTROL_MODE = "arm_pd_ee_target_delta_pose_align2_gripper_pd_joint_pos"
 # only needs scene + 360-photo textures, and the large pool crowds camera buffers.
 RL_RENDERER_MAX_NUM_MATERIALS = 8192
 RL_RENDERER_MAX_NUM_TEXTURES = 2048
-DEFAULT_CONFIG_PATH = SIM2REAL_REPO_ROOT / "config" / "config_debug.yaml"
-DEFAULT_SCENE_KEY = "airy_table_scene14sep26_left_image"
+_CONFIG_PATH_OVERRIDE = os.environ.get("OPENREAL2SIM_RL_CONFIG_PATH", "").strip()
+# Overridable so a policy can be evaluated against the scene definition it was
+# trained on. release.v4 re-parameterised the left_image robot_base_pose and
+# init qpos in place, so the same scene key resolves to a different setup before
+# and after that commit.
+DEFAULT_CONFIG_PATH = (
+    Path(_CONFIG_PATH_OVERRIDE)
+    if _CONFIG_PATH_OVERRIDE
+    else SIM2REAL_REPO_ROOT / "config" / "config_debug.yaml"
+)
+# The monocular reconstruction is ~9% too small against ZED depth, so release.v4
+# ships a metric copy rescaled by 1.0915 about the camera centre. Set
+# OPENREAL2SIM_RL_SCENE_KEY to fall back to the unscaled source scene.
+DEFAULT_SCENE_KEY = os.environ.get(
+    "OPENREAL2SIM_RL_SCENE_KEY", "airy_table_scene14sep26_left_image_metric"
+)
+DEFAULT_SCENE_JSON_PATH = (
+    SIM2REAL_REPO_ROOT / "assets" / "scenes" / DEFAULT_SCENE_KEY / "simulation" / "scene.json"
+)
 DEFAULT_RL_RANDOM_PLACEMENT = {
     "bounds_min": DEFAULT_REACHABLE_BOUNDS_MIN_XY.tolist(),
     "bounds_max": DEFAULT_REACHABLE_BOUNDS_MAX_XY.tolist(),

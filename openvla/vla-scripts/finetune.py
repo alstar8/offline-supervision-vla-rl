@@ -25,7 +25,7 @@ import json
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional, Sequence, Tuple
 
 import draccus
 import torch
@@ -78,6 +78,33 @@ FIXED_UNNORM_STATS = {
 }
 
 ACTION_DIM_NAMES = ("x", "y", "z", "rot_x", "rot_y", "rot_z", "gripper")
+
+# Dims that can actually change the executed action. On this dataset rotation is
+# identically zero, so q01 == q99 and any rotation token unnormalizes back to 0 —
+# rotation accuracy cannot correlate with closed-loop success. Averaging over
+# these four gives a headline that stays comparable when dim weights change.
+CONTROL_DIM_NAMES = ("x", "y", "z", "gripper")
+
+
+def trained_dim_names(dim_weights: Optional[Sequence[float]]) -> Tuple[str, ...]:
+    """Action dims that actually receive gradient.
+
+    A dim with weight 0 is dropped from the loss, so its tokens are whatever the
+    base checkpoint happens to emit. Averaging those into the headline accuracy
+    makes the metric move independently of learning progress (and, on a dataset
+    where the dim is constant, drift downwards), so headline metrics are reported
+    over the trained dims only.
+    """
+    if dim_weights is None:
+        return ACTION_DIM_NAMES
+    return tuple(name for name, weight in zip(ACTION_DIM_NAMES, dim_weights) if weight > 0)
+
+
+def _mean_over_dims(per_dim: Dict[str, float], prefix: str, dim_names: Sequence[str]) -> Optional[float]:
+    """Mean of `per_dim[f'{prefix}{dim}']` over the dims that are present."""
+    values = [per_dim[f"{prefix}{name}"] for name in dim_names if f"{prefix}{name}" in per_dim]
+    return sum(values) / len(values) if values else None
+
 
 # PEFT 0.11.1 matches a string `target_modules` with `re.fullmatch`.
 # Keep projector / proprio_projector / lm_head out of LoRA so they can be
@@ -286,6 +313,17 @@ def finetune(cfg: FinetuneConfig) -> None:
     # Load OpenVLA Processor and Model using HF AutoClasses
     processor = AutoProcessor.from_pretrained(cfg.vla_path, trust_remote_code=True)
     if is_v2:
+        # Hub processing_prismatic still uses torchvision ToTensor. The in-repo
+        # processor expects uint8 NCHW (used by OpenVLA-V2 SFT + DataBC).
+        hub_ip = processor.image_processor
+        processor.image_processor = PrismaticImageProcessor(
+            use_fused_vision_backbone=bool(getattr(hub_ip, "use_fused_vision_backbone", False)),
+            image_resize_strategy=getattr(hub_ip, "image_resize_strategy", None) or "resize-naive",
+            input_sizes=list(getattr(hub_ip, "input_sizes", None) or [(3, 224, 224)]),
+            interpolations=list(getattr(hub_ip, "interpolations", None) or ["bicubic"]),
+            means=list(getattr(hub_ip, "means", None) or [(0.5, 0.5, 0.5)]),
+            stds=list(getattr(hub_ip, "stds", None) or [(0.5, 0.5, 0.5)]),
+        )
         # Build the V2 config from the base checkpoint's config; new modules (proprio projector)
         # are randomly initialized and fully trained via LoRA `modules_to_save`.
         base_config = AutoConfig.from_pretrained(cfg.vla_path, trust_remote_code=True)
@@ -465,6 +503,9 @@ def finetune(cfg: FinetuneConfig) -> None:
     recent_per_dim_acc = {name: deque(maxlen=cfg.grad_accumulation_steps) for name in ACTION_DIM_NAMES}
 
     dim_weights = parse_action_dim_loss_weights(cfg.action_dim_loss_weights)
+    trained_dims = trained_dim_names(dim_weights)
+    if distributed_state.is_main_process:
+        print(f"Headline metrics averaged over trained dims only: {trained_dims}", flush=True)
     last_eval_metrics = {}
 
     # Train!
@@ -542,6 +583,9 @@ def finetune(cfg: FinetuneConfig) -> None:
                         sum(recent_per_dim_acc[dim_name]) / len(recent_per_dim_acc[dim_name])
                     )
 
+            trained_acc = _mean_over_dims(smoothened_per_dim, "train_action_accuracy/", trained_dims)
+            core_acc = _mean_over_dims(smoothened_per_dim, "train_action_accuracy/", CONTROL_DIM_NAMES)
+
             # Push Metrics to W&B (every 10 gradient steps)
             if distributed_state.is_main_process and gradient_step_idx % 10 == 0:
                 wandb.log(
@@ -549,6 +593,8 @@ def finetune(cfg: FinetuneConfig) -> None:
                         "train_loss": smoothened_loss,
                         "action_accuracy": smoothened_action_accuracy,
                         "l1_loss": smoothened_l1_loss,
+                        **({"action_accuracy_trained": trained_acc} if trained_acc is not None else {}),
+                        **({"action_accuracy_core": core_acc} if core_acc is not None else {}),
                         **smoothened_per_dim,
                     },
                     step=gradient_step_idx,
@@ -624,12 +670,25 @@ def finetune(cfg: FinetuneConfig) -> None:
                             sum(eval_per_dim_acc[dim_name]) / len(eval_per_dim_acc[dim_name])
                         )
 
+                eval_acc_trained = _mean_over_dims(eval_per_dim, "eval_action_accuracy/", trained_dims)
+                eval_l1_trained = _mean_over_dims(eval_per_dim, "eval_l1_loss/", trained_dims)
+                eval_acc_core = _mean_over_dims(eval_per_dim, "eval_action_accuracy/", CONTROL_DIM_NAMES)
+                eval_l1_core = _mean_over_dims(eval_per_dim, "eval_l1_loss/", CONTROL_DIM_NAMES)
+
                 if distributed_state.is_main_process:
+                    headline = {
+                        **({"eval_action_accuracy_trained": eval_acc_trained} if eval_acc_trained is not None else {}),
+                        **({"eval_l1_loss_trained": eval_l1_trained} if eval_l1_trained is not None else {}),
+                        **({"eval_action_accuracy_core": eval_acc_core} if eval_acc_core is not None else {}),
+                        **({"eval_l1_loss_core": eval_l1_core} if eval_l1_core is not None else {}),
+                    }
                     last_eval_metrics = {
                         "eval_loss": eval_loss,
                         "eval_action_accuracy": eval_action_accuracy,
                         "eval_l1_loss": eval_l1_loss,
+                        **headline,
                         **eval_per_dim,
+                        "trained_dims": list(trained_dims),
                         "step": int(gradient_step_idx),
                     }
                     wandb.log(
@@ -637,6 +696,7 @@ def finetune(cfg: FinetuneConfig) -> None:
                             "eval_loss": eval_loss,
                             "eval_action_accuracy": eval_action_accuracy,
                             "eval_l1_loss": eval_l1_loss,
+                            **headline,
                             **eval_per_dim,
                         },
                         step=gradient_step_idx,
@@ -662,11 +722,16 @@ def finetune(cfg: FinetuneConfig) -> None:
                     eval_path.write_text(json.dumps(last_eval_metrics, indent=2) + "\n")
                     print(dataset_statistics_message(cfg.dataset_name, cfg.unnorm_key))
                     if last_eval_metrics:
+                        per_dim_str = " ".join(
+                            f"{name}={last_eval_metrics.get(f'eval_action_accuracy/{name}'):.4f}"
+                            for name in trained_dims
+                            if last_eval_metrics.get(f"eval_action_accuracy/{name}") is not None
+                        )
                         print(
                             "Saved eval metrics | "
-                            f"x_acc={last_eval_metrics.get('eval_action_accuracy/x')} "
-                            f"y_acc={last_eval_metrics.get('eval_action_accuracy/y')} "
-                            f"step={last_eval_metrics.get('step')}",
+                            f"acc_core={last_eval_metrics.get('eval_action_accuracy_core')} "
+                            f"| {per_dim_str} "
+                            f"| step={last_eval_metrics.get('step')}",
                             flush=True,
                         )
 

@@ -51,6 +51,11 @@ export TOKENIZERS_PARALLELISM=false
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-4}"
 export VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json
+# release.v4 changed the RL env default to the metric scene (the source
+# reconstruction rescaled by 1.0915). Every checkpoint we evaluate was trained on
+# data rendered from the unscaled left_image scene, so evaluating on the metric
+# copy would score the policy against table and object geometry it never saw.
+export OPENREAL2SIM_RL_SCENE_KEY="${OPENREAL2SIM_RL_SCENE_KEY:-airy_table_scene14sep26_left_image}"
 export PYTHONPATH="${REPO}/SimplerEnv:${REPO}/ManiSkill:${REPO}/real2sim:${REPO}/openvla"
 unset RANK LOCAL_RANK WORLD_SIZE GROUP_RANK LOCAL_WORLD_SIZE MASTER_ADDR MASTER_PORT || true
 unset TORCH_NCCL_BLOCKING_WAIT || true
@@ -89,9 +94,11 @@ echo "RefKL V2 sim eval start $(date -Is) gpu=${CUDA_ID} backend=${OPENREAL2SIM_
   --render_info \
   "$@"
 
-mapfile -t VIDEOS < <(find "${OUT_DIR}/wandb" -path '*glob/vis_0_train/*.mp4' -type f 2>/dev/null | sort)
+# Videos land under ckpts/vis_0_train/ (--only_render) or wandb/*/glob/vis_0_train/
+# depending on wandb mode, so search the whole output dir.
+mapfile -t VIDEOS < <(find "${OUT_DIR}" -path '*vis_0_train/*.mp4' -type f 2>/dev/null | sort)
 if [[ "${#VIDEOS[@]}" -eq 0 ]]; then
-  echo "eval finished but no vis_0_train mp4 under ${OUT_DIR}/wandb" >&2
+  echo "eval finished but no vis_0_train mp4 under ${OUT_DIR}" >&2
   exit 1
 fi
 VID_DIR="${OUT_DIR}/videos"

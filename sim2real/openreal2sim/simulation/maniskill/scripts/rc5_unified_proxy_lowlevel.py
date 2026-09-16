@@ -798,6 +798,14 @@ def _runtime_gripper_uses_signal_only(agent) -> bool:
     return (not has_named_qpos) and has_bounds
 
 
+def _runtime_gripper_is_level_controller(agent) -> bool:
+    """True when the runtime gripper controller takes an absolute openness level in [0, 1]."""
+    gripper_controller = _get_runtime_gripper_controller(agent)
+    if gripper_controller is None:
+        return False
+    return type(gripper_controller).__name__ == "RCLevelHandController"
+
+
 def _set_runtime_gripper_target_qpos(agent, target_state: str, target_qpos):
     gripper_controller = _get_runtime_gripper_controller(agent)
     if gripper_controller is None or not hasattr(gripper_controller, "config"):
@@ -863,6 +871,13 @@ def _infer_proxy_ee_gripper_target(env_unwrapped) -> str:
 
 
 def _get_proxy_ee_gripper_controller_signal(env_unwrapped, target_state: str) -> float:
+    if _runtime_gripper_is_level_controller(env_unwrapped.agent):
+        # Absolute openness levels: 1.0 = fully open, 0.0 = fully closed.
+        # "hold" replays the latched level; before any latch the hand starts open.
+        if target_state == "hold":
+            latched = _get_proxy_ee_latched_gripper_target(env_unwrapped)
+            target_state = latched if latched in {"open", "close"} else "open"
+        return 1.0 if target_state == "open" else 0.0
     if target_state == "hold":
         latched = _get_proxy_ee_latched_gripper_target(env_unwrapped)
         if latched in {"open", "close"}:

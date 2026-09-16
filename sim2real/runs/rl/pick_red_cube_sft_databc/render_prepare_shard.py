@@ -51,6 +51,8 @@ def main() -> None:
     parser.add_argument("--variants", type=int, default=10)
     parser.add_argument("--start", type=int, default=0)
     parser.add_argument("--end", type=int, default=-1)
+    parser.add_argument("--offset", type=int, default=0)
+    parser.add_argument("--stride", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--config_path", type=Path, default=None)
     parser.add_argument("--key", type=str, default="airy_table_scene14sep26_left_image")
@@ -60,15 +62,19 @@ def main() -> None:
     files = _unique_files(args.src_dir)
     if not files:
         raise FileNotFoundError(f"No unique episode npz in {args.src_dir}")
+    if args.stride < 1:
+        raise ValueError(f"stride must be >= 1, got {args.stride}")
+    if args.offset < 0:
+        raise ValueError(f"offset must be >= 0, got {args.offset}")
     end = len(files) if args.end < 0 else min(args.end, len(files))
-    files = files[args.start:end]
+    files = files[args.start:end][args.offset::args.stride]
     args.prep_dir.mkdir(parents=True, exist_ok=True)
     args.tmp_dir.mkdir(parents=True, exist_ok=True)
     bg_cache = args.bg_cache_dir
 
     print(
-        f"render_prepare shard start={args.start} end={end} n={len(files)} "
-        f"variants={args.variants} prep={args.prep_dir}",
+        f"render_prepare shard start={args.start} end={end} offset={args.offset} "
+        f"stride={args.stride} n={len(files)} variants={args.variants} prep={args.prep_dir}",
         flush=True,
     )
     lengths = []

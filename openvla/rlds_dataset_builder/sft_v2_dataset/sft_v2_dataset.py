@@ -8,6 +8,37 @@ import tensorflow_datasets as tfds
 
 import numpy as np
 
+# release.v4 re-parameterised the RC5 base: yaw rotated by -85.98 deg with an exactly
+# compensating +85.98 deg on joint0, and joint3 rewritten one full turn over. World
+# geometry is unchanged, so the rendered frames stay valid and only the base-frame
+# quantities need moving into the new convention.
+BASE_YAW_DEG = float(os.environ.get("RLVLA_SFT_BASE_YAW_DEG", "0") or 0.0)
+J0_OFFSET_RAD = float(os.environ.get("RLVLA_SFT_J0_OFFSET_RAD", "0") or 0.0)
+J3_OFFSET_RAD = float(os.environ.get("RLVLA_SFT_J3_OFFSET_RAD", "0") or 0.0)
+
+
+def retarget_frame(actions, proprio):
+    """Rotate base-frame EE deltas and offset arm qpos into a new base convention."""
+    if BASE_YAW_DEG:
+        # Rotation deltas are applied in the base frame too (root_aligned_body_rotation),
+        # so a nonzero one would need the same remap. This data has them identically
+        # zero; refuse rather than emit a half-converted label set.
+        if not np.allclose(actions[:, 3:6], 0.0):
+            raise ValueError(
+                "RLVLA_SFT_BASE_YAW_DEG is set but action rotation dims are nonzero; "
+                "the base-frame rotation delta remap is not implemented."
+            )
+        theta = np.radians(BASE_YAW_DEG)
+        cos_t, sin_t = np.cos(theta), np.sin(theta)
+        x, y = actions[:, 0].copy(), actions[:, 1].copy()
+        actions[:, 0] = cos_t * x - sin_t * y
+        actions[:, 1] = sin_t * x + cos_t * y
+    if J0_OFFSET_RAD:
+        proprio[:, 0] += J0_OFFSET_RAD
+    if J3_OFFSET_RAD:
+        proprio[:, 3] += J3_OFFSET_RAD
+    return actions, proprio
+
 
 def filter_small_actions(actions, pos_thresh=0.01, rot_thresh=0.06, check_gripper=True):
     if os.environ.get("RLVLA_SFT_DISABLE_FILTER", "1") == "1":
@@ -152,15 +183,23 @@ class SftV2(tfds.core.GeneratorBasedBuilder):
         """Generator of examples for each split."""
 
         def _parse_example(episode_path):
+            try:
+                return _parse_example_inner(episode_path)
+            except Exception:
+                print(f"FAILED parse {episode_path}", flush=True)
+                raise
+
+        def _parse_example_inner(episode_path):
             data = np.load(episode_path, allow_pickle=True)["arr_0"].tolist()
 
             # prepare data
             ins = data['instruction']
             ins = ins.tolist()[0] if isinstance(ins, np.ndarray) else ins
-            actions = data["action"]
+            actions = np.asarray(data["action"], dtype=np.float32).copy()
             images = np.asarray([np.asarray(img) for img in data["image"]])
             wrist_images = np.asarray([np.asarray(img) for img in data["image_wrist"]])
-            proprio = np.asarray(data["proprio"], dtype=np.float32)
+            proprio = np.asarray(data["proprio"], dtype=np.float32).copy()
+            actions, proprio = retarget_frame(actions, proprio)
 
             mask = filter_small_actions(data["action"])
             actions = actions[mask]

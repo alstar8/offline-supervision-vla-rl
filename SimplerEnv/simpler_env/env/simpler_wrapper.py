@@ -103,6 +103,17 @@ def _as_float_col(value, device) -> torch.Tensor:
     return tensor.reshape(-1, 1)
 
 
+# Inference-side counterpart of `retarget_frame` in the sft_v2 RLDS builder, for running a
+# policy trained on one base convention against a scene defined in another (release.v4
+# rotated the RC5 base yaw by -85.98 deg with a compensating +85.98 deg on joint0). Same
+# sign convention as the builder: the yaw rotates model-frame xy deltas into the env frame,
+# and the joint offsets are what the env adds on top of the training convention, so they are
+# subtracted from proprio before the policy sees it. All default to off.
+_ACTION_YAW_RAD = np.radians(float(os.environ.get("RLVLA_ACTION_YAW_DEG", "0") or 0.0))
+_PROPRIO_J0_OFFSET_RAD = float(os.environ.get("RLVLA_PROPRIO_J0_OFFSET_RAD", "0") or 0.0)
+_PROPRIO_J3_OFFSET_RAD = float(os.environ.get("RLVLA_PROPRIO_J3_OFFSET_RAD", "0") or 0.0)
+
+
 def _clip_ee_delta(action: torch.Tensor, max_ee_delta: float) -> torch.Tensor:
     limit = float(max_ee_delta)
     if limit <= 0.0:
@@ -148,6 +159,11 @@ def _shaped_grasp_reward(info, reward_old, args, step=None):
     yeet_coef = _effective_yeet_coef(args, step)
     if yeet_coef > 0.0 and yeet_h > 0.0 and height_t is not None:
         over = (height_t - yeet_h).clamp(min=0.0)
+        # Unbounded, a diverged object at 8 m yields a -16 potential that swamps the
+        # +1.0 success term and makes the critic unfittable.
+        yeet_clip = float(getattr(args, "reward_yeet_clip", 0.0) or 0.0)
+        if yeet_clip > 0.0:
+            over = over.clamp(max=yeet_clip)
         if bool(getattr(args, "reward_yeet_grasp_only", False)):
             over = over * grasped
         reward = reward - yeet_coef * over
@@ -163,18 +179,25 @@ def _shaped_grasp_reward(info, reward_old, args, step=None):
 
 
 class GraspHoldAssist:
-    """Force-close after first close, and absorb after K consecutive successes."""
+    """Force-close after first close, absorb after K consecutive successes, and
+    absorb envs whose object has left the reachable workspace."""
 
     def __init__(self, args, num_envs: int):
         self.args = args
         self.num_envs = int(num_envs)
         self.sticky_steps = int(getattr(args, "sticky_gripper_steps", 0) or 0)
         self.terminate_steps = int(getattr(args, "success_terminate_steps", 0) or 0)
+        self.escape_height = float(getattr(args, "escape_height", 0.0) or 0.0)
+        self.escape_below = float(getattr(args, "escape_below", 0.0) or 0.0)
+        self.escape_dist = float(getattr(args, "escape_dist", 0.0) or 0.0)
+        self.escape_penalty = float(getattr(args, "reward_escape_penalty", 0.0) or 0.0)
+        self.reward_scale = float(getattr(args, "reward_scale", 1.0) or 1.0)
         self._closed_once = None
         self._sticky_left = None
         self._absorbed = None
         self._streak = None
         self._latched_success = None
+        self._escaped = None
 
     def reset(self, device):
         n = self.num_envs
@@ -183,6 +206,7 @@ class GraspHoldAssist:
         self._absorbed = torch.zeros(n, dtype=torch.bool, device=device)
         self._streak = torch.zeros(n, dtype=torch.int32, device=device)
         self._latched_success = torch.zeros(n, dtype=torch.bool, device=device)
+        self._escaped = torch.zeros(n, dtype=torch.bool, device=device)
 
     def before_physics(self, action: torch.Tensor) -> torch.Tensor:
         if self._absorbed is None:
@@ -207,20 +231,86 @@ class GraspHoldAssist:
         self._sticky_left = torch.clamp(self._sticky_left - 1, min=0)
         return action
 
+    def _detect_escape(self, info, device):
+        """True where the object is no longer in a physically plausible place."""
+        if self.escape_height <= 0.0 and self.escape_below <= 0.0 and self.escape_dist <= 0.0:
+            return None
+        escaped = None
+        height = info.get("obj_height_above_table")
+        if height is not None and (self.escape_height > 0.0 or self.escape_below > 0.0):
+            h = _as_float_col(height, device).reshape(-1)
+            if self.escape_height > 0.0:
+                escaped = h > self.escape_height
+            if self.escape_below > 0.0:
+                fell = h < -self.escape_below
+                escaped = fell if escaped is None else (escaped | fell)
+        dist = info.get("gripper_obj_dist")
+        if dist is not None and self.escape_dist > 0.0:
+            flew = _as_float_col(dist, device).reshape(-1) > self.escape_dist
+            escaped = flew if escaped is None else (escaped | flew)
+        return escaped
+
     def after_physics(self, info, reward):
-        if self.terminate_steps <= 0 or self._absorbed is None:
+        if self._absorbed is None:
             extra = torch.zeros(reward.shape[0], 1, device=reward.device, dtype=torch.bool)
-            return reward, extra
-        success = info["success"].reshape(-1).to(device=reward.device)
-        if success.dtype != torch.bool:
-            success = success > 0.5
+            return self._scale(reward), extra
         was_absorbed = self._absorbed
-        self._streak = torch.where(success, self._streak + 1, torch.zeros_like(self._streak))
-        self._absorbed = self._absorbed | (self._streak >= int(self.terminate_steps))
-        self._latched_success = self._latched_success | self._absorbed
+
+        # Detect escapes first so this step's success streak can ignore them. The env
+        # reports success purely from object-vs-goal distance, so a cube that has fallen
+        # through the table near the goal reports success while the arm is metres away —
+        # observed in run8 at gripper_obj_dist 4.46 m, obj_height -0.017 m. Penalising the
+        # reward is not enough: without this mask the streak still latches and SR reports
+        # the hack as a real pick.
+        escaped = self._detect_escape(info, reward.device)
+        newly_escaped = None
+        if escaped is not None:
+            newly_escaped = escaped & ~self._absorbed
+            self._escaped = self._escaped | escaped
+
+        if self.terminate_steps > 0:
+            success = info["success"].reshape(-1).to(device=reward.device)
+            if success.dtype != torch.bool:
+                success = success > 0.5
+            if self._escaped is not None:
+                success = success & ~self._escaped
+            self._streak = torch.where(success, self._streak + 1, torch.zeros_like(self._streak))
+            held = self._streak >= int(self.terminate_steps)
+            self._absorbed = self._absorbed | held
+            # Latch from the hold condition only: an escaped env is absorbed too, and
+            # latching off _absorbed would report it as a success.
+            self._latched_success = self._latched_success | held
+
+        if escaped is not None:
+            self._absorbed = self._absorbed | escaped
+
         reward = torch.where(was_absorbed.reshape(-1, 1), torch.zeros_like(reward), reward)
+        # Charge escapes after the zeroing: a newly escaped env was not absorbed before,
+        # so its reward survived above and the penalty lands exactly once.
+        if newly_escaped is not None and self.escape_penalty > 0.0:
+            reward = reward - self.escape_penalty * newly_escaped.reshape(-1, 1).to(reward.dtype)
         extra = self._absorbed.reshape(-1, 1)
-        return reward, extra
+        # Scale last so every term above (shaped potential, absorb zeroing, escape
+        # penalty) keeps its relative weight; only the critic's target changes scale.
+        return self._scale(reward), extra
+
+    def _scale(self, reward):
+        if self.reward_scale == 1.0:
+            return reward
+        return reward * self.reward_scale
+
+    def escaped_flags(self):
+        """Per-env escape flags, or None when escape detection is disabled.
+
+        Reported as env/escaped so reward hacking is directly measurable: a run that
+        grasps but does not succeed used to be diagnosable only by eyeballing mean
+        gripper_obj_dist in the per-step dumps.
+        """
+        if self._escaped is None:
+            return None
+        if self.escape_height <= 0.0 and self.escape_below <= 0.0 and self.escape_dist <= 0.0:
+            return None
+        return [float(self._escaped[i].item()) for i in range(int(self._escaped.numel()))]
 
     def override_episode_success(self, values):
         if self.terminate_steps <= 0 or self._latched_success is None:
@@ -243,6 +333,12 @@ def _reward_shaping_log_line(args) -> str:
         f"yeet_coef={float(getattr(args, 'reward_yeet_coef', 0.0) or 0.0)} | "
         f"yeet_grasp_only={bool(getattr(args, 'reward_yeet_grasp_only', False))} | "
         f"yeet_warmup={int(getattr(args, 'reward_yeet_warmup_steps', 0) or 0)} | "
+        f"yeet_clip={float(getattr(args, 'reward_yeet_clip', 0.0) or 0.0)} | "
+        f"escape_h={float(getattr(args, 'escape_height', 0.0) or 0.0)} | "
+        f"escape_below={float(getattr(args, 'escape_below', 0.0) or 0.0)} | "
+        f"escape_dist={float(getattr(args, 'escape_dist', 0.0) or 0.0)} | "
+        f"escape_penalty={float(getattr(args, 'reward_escape_penalty', 0.0) or 0.0)} | "
+        f"reward_scale={float(getattr(args, 'reward_scale', 1.0) or 1.0)} | "
         f"max_ee_delta={float(getattr(args, 'max_ee_delta', 0.0) or 0.0)} | "
         f"sticky_gripper={int(getattr(args, 'sticky_gripper_steps', 0) or 0)} | "
         f"success_terminate={int(getattr(args, 'success_terminate_steps', 0) or 0)}"
@@ -267,6 +363,10 @@ def _fill_episode_info(info, truncated, hold_assist: GraspHoldAssist):
         if key == "success":
             values = hold_assist.override_episode_success(values)
         info["episode"][key] = values
+
+    escaped = hold_assist.escaped_flags()
+    if escaped is not None:
+        info["episode"]["escaped"] = escaped
 
 
 def _quantize_gripper_openness(gripper: torch.Tensor) -> torch.Tensor:
@@ -568,6 +668,10 @@ class SimlerWrapper:
         )
         arm_qpos = qpos[:, :n_arm]
         hand_closure = (qpos[:, n_arm:] / close_qpos).clamp(0.0, 1.0).mean(dim=1, keepdim=True)
+        if _PROPRIO_J0_OFFSET_RAD or _PROPRIO_J3_OFFSET_RAD:
+            arm_qpos = arm_qpos.clone()
+            arm_qpos[:, 0] -= _PROPRIO_J0_OFFSET_RAD
+            arm_qpos[:, 3] -= _PROPRIO_J3_OFFSET_RAD
         return torch.cat([arm_qpos, hand_closure], dim=1)
 
     def _form_obs(self, obs: dict):
@@ -625,6 +729,12 @@ class SimlerWrapper:
 
         # to tpdv
         action = action.to(raw_actions.device)
+        if _ACTION_YAW_RAD:
+            # Rotate before clipping: the env clips per axis in its own frame.
+            cos_t, sin_t = np.cos(_ACTION_YAW_RAD), np.sin(_ACTION_YAW_RAD)
+            x, y = action[:, 0].clone(), action[:, 1].clone()
+            action[:, 0] = cos_t * x - sin_t * y
+            action[:, 1] = sin_t * x + cos_t * y
         return _clip_ee_delta(action, float(getattr(self.args, "max_ee_delta", 0.0) or 0.0))
 
     def reset(self, obj_set: str, same_init: bool = False):

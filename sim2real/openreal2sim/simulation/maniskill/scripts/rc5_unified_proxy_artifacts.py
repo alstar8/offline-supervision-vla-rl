@@ -48,6 +48,10 @@ class UnifiedDenseEpisodeCapture:
     rl4vla_preencoded_wrist_images_per_env: list[list] | None
     actions_per_env: list[list]
     infos_per_env: list[list]
+    robot_qpos_per_env: list[list]
+    object_poses_per_env: list[list]
+    object_names: list | None
+    pano_per_env: list
     shared_video_frame_targets_per_env: list[list] | None
     finalized_env_indices: set[int]
     raw_writer_executor: ThreadPoolExecutor | None
@@ -451,6 +455,10 @@ def start_unified_dense_episode_capture(
         ),
         actions_per_env=[[] for _ in range(normalized_num_envs)],
         infos_per_env=[[] for _ in range(normalized_num_envs)],
+        robot_qpos_per_env=[[] for _ in range(normalized_num_envs)],
+        object_poses_per_env=[[] for _ in range(normalized_num_envs)],
+        object_names=None,
+        pano_per_env=[None] * normalized_num_envs,
         shared_video_frame_targets_per_env=normalized_shared_video_targets,
         finalized_env_indices=set(),
         raw_writer_executor=raw_writer_executor,
@@ -529,6 +537,63 @@ def _wrist_preencoded_for_env(capture: UnifiedDenseEpisodeCapture, env_index: in
     return candidate
 
 
+def _capture_per_env_kinematic_state(env):
+    """Return (robot_qpos[num_envs, D], object_poses[num_envs, N, 7], object_names).
+
+    Records everything needed to re-render the exact scene later: robot articulation
+    qpos (arm + hand) and every object actor's pose. Velocities are irrelevant for
+    frame rendering and are intentionally skipped.
+    """
+    unwrapped = env.unwrapped
+    num_envs = int(unwrapped.num_envs)
+    qpos = unwrapped.agent.robot.get_qpos()
+    if isinstance(qpos, torch.Tensor):
+        qpos = qpos.detach().cpu().numpy()
+    qpos = np.asarray(qpos, dtype=np.float32)
+    if qpos.ndim == 1:
+        qpos = qpos.reshape(1, -1)
+
+    object_actors = getattr(unwrapped, "object_actors", {}) or {}
+    names = sorted(object_actors.keys())
+    poses = np.zeros((num_envs, len(names), 7), dtype=np.float32)
+    for col, name in enumerate(names):
+        actor = object_actors[name]
+        pose = actor.pose if hasattr(actor, "pose") else actor.get_pose()
+        p, q = pose.p, pose.q
+        if isinstance(p, torch.Tensor):
+            p = p.detach().cpu().numpy()
+        if isinstance(q, torch.Tensor):
+            q = q.detach().cpu().numpy()
+        p = np.asarray(p, dtype=np.float32).reshape(-1, 3)
+        q = np.asarray(q, dtype=np.float32).reshape(-1, 4)
+        if p.shape[0] == 1 and num_envs > 1:
+            p = np.repeat(p, num_envs, axis=0)
+            q = np.repeat(q, num_envs, axis=0)
+        poses[:, col, :3] = p
+        poses[:, col, 3:] = q
+    return qpos, poses, names
+
+
+def _append_state_to_dense_capture(capture, env, *, env_indices=None):
+    qpos, poses, names = _capture_per_env_kinematic_state(env)
+    if capture.object_names is None:
+        capture.object_names = names
+    unwrapped = env.unwrapped
+    pano_idx = getattr(unwrapped, "_pano_photo_idx", None)
+    pano_yaw = getattr(unwrapped, "_pano_yaw", None)
+    indices = range(capture.num_envs) if env_indices is None else env_indices
+    for env_index in indices:
+        if env_index in capture.finalized_env_indices:
+            continue
+        capture.robot_qpos_per_env[env_index].append(qpos[env_index].copy())
+        capture.object_poses_per_env[env_index].append(poses[env_index].copy())
+        if capture.pano_per_env[env_index] is None and pano_idx is not None and pano_yaw is not None:
+            capture.pano_per_env[env_index] = (
+                int(np.asarray(pano_idx).reshape(-1)[env_index]),
+                float(np.asarray(pano_yaw).reshape(-1)[env_index]),
+            )
+
+
 def append_dense_episode_initial_frame_if_enabled(env):
     capture = _ACTIVE_UNIFIED_DENSE_EPISODE_CAPTURE
     if capture is None:
@@ -553,6 +618,7 @@ def append_dense_episode_initial_frame_if_enabled(env):
             frame=frame,
             wrist_frame=None if wrist_frames is None else wrist_frames[env_index],
         )
+    _append_state_to_dense_capture(capture, env)
 
 
 def _normalize_dense_episode_info(info):
@@ -648,6 +714,7 @@ def record_dense_episode_step_if_enabled(env, batched_action, step_result):
             frame=frames[env_index],
             wrist_frame=None if wrist_frames is None else wrist_frames[env_index],
         )
+    _append_state_to_dense_capture(capture, env)
 
 
 def _write_batched_dense_episode_artifact_for_env(
@@ -735,6 +802,15 @@ def _write_batched_dense_episode_artifact_for_env(
                 env_index,
                 _wrist_frames_for_env(capture, env_index),
             ),
+            "robot_qpos": capture.robot_qpos_per_env[env_index],
+            "object_poses": capture.object_poses_per_env[env_index],
+            "object_names": capture.object_names,
+            "pano_photo_idx": (
+                None if capture.pano_per_env[env_index] is None else capture.pano_per_env[env_index][0]
+            ),
+            "pano_yaw": (
+                None if capture.pano_per_env[env_index] is None else capture.pano_per_env[env_index][1]
+            ),
             "embedded_runtime_config_yaml": _read_optional_text_file(
                 capture.runtime_config_paths_per_env[env_index],
                 label=f"runtime_config_paths_per_env[{env_index}]",
@@ -795,6 +871,9 @@ def finalize_batched_dense_episode_env_if_available(
         capture.rl4vla_preencoded_wrist_images_per_env[normalized_env_index] = []
     capture.actions_per_env[normalized_env_index] = []
     capture.infos_per_env[normalized_env_index] = []
+    capture.robot_qpos_per_env[normalized_env_index] = []
+    capture.object_poses_per_env[normalized_env_index] = []
+    capture.pano_per_env[normalized_env_index] = None
     capture.finalized_env_indices.add(normalized_env_index)
     return (
         None
@@ -916,6 +995,11 @@ def write_dense_episode_artifact_if_available(
                     0,
                     _wrist_frames_for_env(capture, 0),
                 ),
+                robot_qpos=capture.robot_qpos_per_env[0],
+                object_poses=capture.object_poses_per_env[0],
+                object_names=capture.object_names,
+                pano_photo_idx=(None if capture.pano_per_env[0] is None else capture.pano_per_env[0][0]),
+                pano_yaw=(None if capture.pano_per_env[0] is None else capture.pano_per_env[0][1]),
                 embedded_runtime_config_yaml=_read_optional_text_file(
                     capture.runtime_config_paths_per_env[0],
                     label="runtime_config_paths_per_env[0]",
