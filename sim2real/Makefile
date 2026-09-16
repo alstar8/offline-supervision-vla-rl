@@ -21,6 +21,17 @@ COMPRESS_OUTPUT_NPZ ?=
 COMPRESS_OUTPUT_GIF ?=
 COMPRESS_ARGS ?=
 TASK_OBJECT_ARG := $(if $(strip $(TASK_OBJECT)),--task_object_id $(TASK_OBJECT),)
+# Joint-trajectory recording for the real robot (see real_replay/README.md).
+# DESCEND_DZ raises the descend point: the real hand sits ~1 cm below plan.
+DESCEND_DZ ?= 0.015
+# APPROACH_YAW rotates the grasp calibration about the object (deg), e.g. to approach past a neighbour.
+APPROACH_YAW ?= 0
+JOINTS_VIEWER ?=
+JOINTS_VIEWER_ARG := $(if $(strip $(JOINTS_VIEWER)),--viewer,)
+JOINTS_TTY := $(if $(strip $(JOINTS_VIEWER)),-it,)
+# Viewing a recorded joint_trajectory.npz in the simulator.
+TRAJ ?=
+VIEW_ARGS ?=
 OUT_CSV_ARG := $(if $(strip $(OUT_CSV)),--output_csv $(OUT_CSV),)
 OUT_YAML_ARG := $(if $(strip $(OUT_YAML)),--output_runtime_config_yaml $(OUT_YAML),)
 OUT_JSON_ARG := $(if $(strip $(OUT_JSON)),--output_runtime_request_json $(OUT_JSON),)
@@ -33,15 +44,25 @@ GREEN := \033[1;32m
 YELLOW := \033[1;33m
 RESET := \033[0m
 
-.PHONY: help config build up stop down restart ps logs shell planner planner-headless replay replay-dry npz-stats stats csv compress test
+.PHONY: help config build up stop down restart ps logs shell planner planner-headless record-joints view-joints replay replay-dry npz-stats stats csv compress test
 
 help: ## Показать доступные команды Make и основные override-параметры
 	@printf "$(BLUE)Команды Make для Sim2Real$(RESET)\n\n"
+	@printf "Запускать на хосте из каталога sim2real; нужен работающий $(CONTAINER).\n"
+	@printf "Существующий контейнер: docker start $(CONTAINER) (без пересборки).\n\n"
+	@printf "$(YELLOW)Доступные KEY в config/config_debug.yaml$(RESET)\n"
+	@printf "  airy_table_scene14sep26_left_image: новая сцена левой камеры, по умолчанию release.v4\n"
+	@printf "  airi_table_new_empty3_image: предыдущая сцена release.v3\n"
+	@printf "SCENE автоматически следует за KEY; явный SCENE=... имеет приоритет.\n"
+	@printf "planner/planner-headless используют proxy, не MPlib; макрос стартует автоматически.\n"
+	@printf "Пустой TASK_OBJECT: manip_object_id из конфига (сейчас blue_cube_ext для обеих сцен).\n"
+	@printf "replay использует сцену из сохранённого NPZ, не KEY из Makefile.\n\n"
 	@printf "$(YELLOW)Переопределяемые переменные$(RESET)\n"
 	@printf "  $(CYAN)KEY$(RESET)=%s\n" "$(KEY)"
 	@printf "  $(CYAN)TASK$(RESET)=%s\n" "$(TASK)"
 	@printf "  $(CYAN)TASK_OBJECT$(RESET)=%s\n" "$(TASK_OBJECT)"
 	@printf "  $(CYAN)CONFIG$(RESET)=%s\n" "$(CONFIG)"
+	@printf "  $(CYAN)DESCEND_DZ$(RESET)=%s\n" "$(DESCEND_DZ)"
 	@printf "  $(CYAN)SCENE$(RESET)=%s\n" "$(SCENE)"
 	@printf "  $(CYAN)NPZ$(RESET)=/app/runs/.../rl4vla_raw_episode_success.npz\n\n"
 	@printf "  $(CYAN)OUT_CSV$(RESET)=/tmp/actions.csv\n"
@@ -55,9 +76,14 @@ help: ## Показать доступные команды Make и основн
 	@printf "  make up\n"
 	@printf "  make planner\n"
 	@printf "  make planner TASK_OBJECT=yellow_cube_ext\n"
-	@printf "  make planner KEY=airy_table_scene14sep26_left_image TASK=pick_up\n"
-	@printf "  make planner KEY=airy_table_scene14sep26_left_image TASK=pick_up TASK_OBJECT=yellow_cube_ext\n"
-	@printf "  make planner KEY=airy_table_scene14sep26_left_image TASK=pick_up SCENE=assets/scenes/airy_table_scene14sep26_left_image/simulation/scene.json\n"
+	@printf "  make planner KEY=airy_table_scene14sep26_left_image\n"
+	@printf "  make planner KEY=airi_table_new_empty3_image\n"
+	@printf "  make planner-headless KEY=airy_table_scene14sep26_left_image\n"
+	@printf "  make planner-headless KEY=airi_table_new_empty3_image\n"
+	@printf "  make planner KEY=airy_table_scene14sep26_left_image_metric\n"
+	@printf "  make planner-headless KEY=airy_table_scene14sep26_left_image_metric\n"
+	@printf "  make record-joints KEY=airy_table_scene14sep26_left_image_metric TASK_OBJECT=green_cube_ext\n"
+	@printf "  make view-joints TRAJ=runs/manual/<run>/joint_trajectory.npz VIEW_ARGS=\"--until-height 0.15\"\n"
 	@printf "  make test\n"
 	@printf "  make stats NPZ=/app/runs/manual/<run>/rl4vla_raw_episode_success.npz\n"
 	@printf "  make csv NPZ=/app/runs/manual/<run>/rl4vla_raw_episode_success.npz\n"
@@ -103,6 +129,14 @@ planner: ## Запустить proxy planner с визуализацией
 
 planner-headless: ## Запустить proxy planner в headless-режиме
 	docker exec $(CONTAINER) bash -lc 'cd /app && PYTHONPATH=/app $(PYTHON) openreal2sim/simulation/maniskill/scripts/run_rc5_unified.py --motion_backend proxy_ee_delta --config_path $(CONFIG) --key $(KEY) --scene $(SCENE) --task_type $(TASK) $(TASK_OBJECT_ARG) --headless'
+
+record-joints: ## Прогнать planner и записать joint_trajectory.npz для суставного реплея на реальном роботе; нужен TASK_OBJECT
+	@if [ -z "$(TASK_OBJECT)" ]; then echo "Set TASK_OBJECT=... (for the real robot use KEY=airy_table_scene14sep26_left_image_metric)"; exit 1; fi
+	docker exec $(JOINTS_TTY) $(CONTAINER) bash -lc 'cd /app && PYTHONPATH=/app $(PYTHON) real_replay/export_sim_joint_trajectory.py --key $(KEY) --object $(TASK_OBJECT) --task $(TASK) --config $(CONFIG) --descend-offset-dz $(DESCEND_DZ) --approach-yaw-deg $(APPROACH_YAW) $(JOINTS_VIEWER_ARG)'
+
+view-joints: ## Показать joint_trajectory.npz в симуляторе (записанные суставы и объект, без физики); нужен TRAJ=runs/manual/<run>/joint_trajectory.npz
+	@if [ -z "$(TRAJ)" ]; then echo "Set TRAJ=runs/manual/<run>/joint_trajectory.npz (options via VIEW_ARGS, e.g. VIEW_ARGS=\"--until-height 0.15\")"; exit 1; fi
+	docker exec -it $(CONTAINER) bash -lc 'cd /app && PYTHONPATH=/app $(PYTHON) real_replay/view_joint_trajectory.py $(TRAJ) $(VIEW_ARGS)'
 
 replay: ## Запустить replay для сохранённого RL4VLA raw episode; нужен NPZ=/app/...
 	@if [ -z "$(NPZ)" ]; then echo "Set NPZ=/app/runs/.../rl4vla_raw_episode_success.npz"; exit 1; fi

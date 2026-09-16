@@ -1,0 +1,116 @@
+{
+  "background": {
+    "registered": "/app/assets/scenes/airy_table_scene14sep26_left_image_metric/simulation/background_registered.glb",
+    "collision": "/app/assets/scenes/airy_table_scene14sep26_left_image_metric/simulation/background_registered_collision.glb"
+  },
+  "groundplane_in_cam": {
+    "point": [
+      -0.055228252908214925,
+      0.12206454702094197,
+      0.6931603265702724
+    ],
+    "normal": [
+      0.02551493442034914,
+      -0.6404707528070878,
+      -0.7675585990126407
+    ]
+  },
+  "groundplane_in_sim": {
+    "point": [
+      -0.009069881402831478,
+      -0.590272820693366,
+      0.2734125222901883
+    ],
+    "normal": [
+      1.3364836945486445e-09,
+      -3.794520420101109e-08,
+      0.9999999999999993
+    ]
+  },
+  "camera": {
+    "camera_heading_wxyz": [
+      0.3409115906826037,
+      -0.9393502588723555,
+      -0.03742163137405646,
+      -0.0
+    ],
+    "camera_position": [
+      0.05510800120944859,
+      -0.9369891712472126,
+      0.8850415957748899
+    ],
+    "camera_opencv_to_world": [
+      [
+        0.9971992430106084,
+        0.07030403823729159,
+        -0.02551493575533523,
+        0.05510800120944859
+      ],
+      [
+        0.07030403823729159,
+        -0.7647578176871223,
+        0.6404707819205804,
+        -0.9369891712472126
+      ],
+      [
+        0.02551493575533523,
+        -0.6404707819205804,
+        -0.7675585746765138,
+        0.8850415957748899
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "width": 1886.0,
+    "height": 1059.0,
+    "fx": 864.0193481445312,
+    "fy": 864.0193481445312,
+    "cx": 943.0,
+    "cy": 529.5
+  },
+  "objects": {
+    "3": {
+      "oid": 3,
+      "name": "coin",
+      "object_center": [
+        0.014900930156263231,
+        -0.30451727775570203,
+        0.2779144191615891
+      ],
+      "object_min": [
+        0.0014900936032087378,
+        -0.3122163097867784,
+        0.2775566040158898
+      ],
+      "object_max": [
+        0.011384151632143263,
+        -0.2970153657952366,
+        0.2926230396211773
+      ],
+      "optimized": "/app/assets/scenes/airy_table_scene14sep26_left_image/simulation/3_coin_optimized.glb",
+      "fdpose_trajs": "/app/assets/scenes/airy_table_scene14sep26_left_image/simulation/3_coin_trajs.npy",
+      "simple_trajs": "/app/assets/scenes/airy_table_scene14sep26_left_image/simulation/3_coin_simple_trajs.npy",
+      "hybrid_trajs": "/app/assets/scenes/airy_table_scene14sep26_left_image/simulation/3_coin_hybrid_trajs.npy"
+    }
+  },
+  "aabb": {
+    "scene_min": [
+      -1.9125878593570804,
+      -0.8872713401400835,
+      -0.7785303265333211
+    ],
+    "scene_max": [
+      1.902503095135751,
+      1.0587403584783233,
+      0.6165677145065164
+    ]
+  },
+  "scene_mesh": {
+    "optimized": "/app/assets/scenes/airy_table_scene14sep26_left_image/simulation/scene_optimized.glb"
+  },
+  "background_image": "/app/assets/scenes/airy_table_scene14sep26_left_image_metric/simulation/background.png"
+}

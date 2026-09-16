@@ -988,6 +988,7 @@ def _build_env_kwargs(
         "control_mode": args.control_mode or sim_cfg.get("control_mode", DEFAULT_CONTROL_MODE),
         "cameras_config": copy.deepcopy(sim_cfg.get("cameras")) if isinstance(sim_cfg.get("cameras"), dict) else None,
         "lighting_config": lighting_config,
+        "hand_visual_profile": copy.deepcopy(sim_cfg.get("hand_visual_profile")),
         "robot_base_pose": sim_cfg.get("robot_base_pose"),
         "robot_init_qpos": sim_cfg.get("robot_init_qpos"),
         "object_material": sim_cfg.get("object_material"),

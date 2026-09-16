@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
-CKPT="${CKPT:-${SCRIPT_DIR}/wandb/offline-run-20260909_171210-wm5o2078/glob/steps_0059}"
+CKPT="${CKPT:-${SCRIPT_DIR}/wandb/offline-run-20260915_093914-9ehszx0r/glob/steps_0009}"
 PY="${PY:-/home/admin/.conda/envs/rlvla_env/bin/python}"
 export RC5_PYTHON_API_ROOT="${RC5_PYTHON_API_ROOT:-/home/admin/Desktop/RC5_Hand_OpenVLA/python_api}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-1}"

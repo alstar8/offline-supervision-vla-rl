@@ -9,12 +9,15 @@ Sim-base xyz/rpy are applied in the real RC5 base with no extra yaw
 the model predicted it. Translation/rotation deltas accumulate on a target
 TCP (sim ``use_target=True``), not on the live pose.
 
-Usage:
+Usage -- needs the rlvla_env interpreter (peft, prismatic/dlimp); the system
+python and aero-env lack them. runs/rl/pick_red_cube_sft_databc/eval_real.sh
+runs it with PYTHONPATH=openvla; from the repo root first
+export HF_HOME=/home/admin/.cache/huggingface PYTHONNOUSERSITE=1:
     # Always dry-run first (loads the model, dummy frames, no hardware):
-    python eval_openvla_real.py --dry-run
+    sim2real/runs/rl/pick_red_cube_sft_databc/eval_real.sh --dry-run
 
-    # Real robot (Ctrl+C = hold + open hand):
-    python eval_openvla_real.py --instruction "Pick red cube"
+    # Real robot (Ctrl+C = hold + open hand); CKPT=... picks the checkpoint:
+    sim2real/runs/rl/pick_red_cube_sft_databc/eval_real.sh --instruction "Pick red cube"
 """
 
 from __future__ import annotations
@@ -55,9 +58,9 @@ DEFAULT_RC5_PYTHON_API_CANDIDATES = (
 RC5_IP = "10.10.10.10"
 HAND_SLOT_NAMES = ("thumb_abd", "thumb_flex", "thumb_mcp_ip", "index", "middle", "ring", "pinky")
 HAND_SLOT_UPPER = (100.0, 55.0, 90.0, 90.0, 90.0, 90.0, 90.0)
-HAND_OPEN = [70.0, 20.0, 15.0, 30.0, 30.0, 30.0, 30.0]
+HAND_OPEN = [40.0, 20.0, 15.0, 30.0, 30.0, 30.0, 30.0]
 HAND_CLOSE = [100.0, 55.0, 30.0, 60.0, 60.0, 60.0, 60.0]
-HAND_HOLD = [70.0, 3.5, 14.0, 37.4, 29.4, 30.2, 29.4]
+HAND_HOLD = [40.0, 3.5, 14.0, 37.4, 29.4, 30.2, 29.4]
 for _name, _value, _hi in zip(HAND_SLOT_NAMES, HAND_HOLD, HAND_SLOT_UPPER):
     if not 0.0 <= _value <= _hi:
         raise ValueError(f"HAND_HOLD[{_name}]={_value} outside the joint limit 0..{_hi}")
@@ -89,10 +92,14 @@ STALL_PROGRESS_M = 0.002
 STALL_COMMAND_M = 0.004
 LIMIT_MARGIN_M = 0.010
 
-# Measured on this RC5 after placing the arm in the real pick-red-cube home
-# (2026-09-10 14:06). Joints are commanded; TCP is recorded for logs.
-HOME_JOINTS_DEG = (106.345596, -93.485413, -101.003151, 179.99073, -157.6054, -2.867088)
-HOME_TCP_M_DEG = (-0.160111, 0.396493, 0.32875, 95.567035, -10.529792, -96.423843)
+# Episode start in the airy_table_scene14sep26_left_image[_metric] scenes: the `top`
+# robot_init_qpos profile config/config_debug.yaml uses for the red cube
+# (orange_cube_ext). Those scenes use sim joints = real joints, so the profile is
+# commanded as is. The previous home, measured for airi_table_new_empty3_image
+# (URDF joint0 = RC5 joint0 - 90 deg), was
+# (106.345596, -93.485413, -101.003151, 179.99073, -157.6054, -2.867088).
+# The home TCP is read back from the controller after homing.
+HOME_JOINTS_DEG = (102.326481, -93.506712, -101.614065, 179.518277, -157.563394, -2.864789)
 HOME_JOINT_SPEED = 25.0
 HOME_JOINT_ACCEL = 25.0
 # wait_waypoint_completion() returns once the controller's waypoint buffer
@@ -102,7 +109,8 @@ HOME_SETTLE_TOL_DEG = 0.5
 HOME_SETTLE_TIMEOUT_SEC = 10.0
 HOME_SETTLE_POLL_SEC = 0.05
 
-# Joint-1 +90° is only a qpos home convention. Cartesian VLA deltas are already
+# The old scene's joint +90° was only a qpos home convention (the new scenes use
+# none). Cartesian VLA deltas are already
 # in the robot-base frame used by the RC5 TCP API; the proven desktop eval and
 # NPZ replay apply them with identity. Teleop's Rz(+90°) is real→sim for the
 # human stick, not sim→real for the policy. Use --action-remap-rpy-deg if needed.
@@ -677,7 +685,7 @@ def _parse_args() -> argparse.Namespace:
         "--home-mode",
         choices=("sim", "current"),
         default="sim",
-        help="Episode start: recorded real home joints (default) or leave the arm where it is",
+        help="Episode start: the scene home joints (default) or leave the arm where it is",
     )
     return parser.parse_args()
 
@@ -789,9 +797,11 @@ def main() -> None:
             _grab_openvla_frame(zed_ctx, rs_pipeline)
 
         home_joints = None
+        home_tcp = None
         if args.home_mode == "sim":
-            print("Moving to recorded home pose...")
+            print("Moving to the scene home pose...")
             home_joints = _move_home(robot)
+            home_tcp = list(robot.motion.linear.get_actual_position(orientation_units="deg"))
         elif args.home_mode == "current":
             print("Keeping current arm pose as episode start.")
         else:
@@ -827,7 +837,7 @@ def main() -> None:
             "approach_hand": args.approach_hand,
             "approach_hand_deg": list(APPROACH_HANDS[args.approach_hand]),
             "home_joints_target_deg": [round(v, 6) for v in HOME_JOINTS_DEG],
-            "home_tcp_m_deg": [round(v, 6) for v in HOME_TCP_M_DEG],
+            "home_tcp_m_deg": None if home_tcp is None else [round(float(v), 6) for v in home_tcp],
             "home_joints_deg": None if home_joints is None else [round(float(v), 6) for v in home_joints],
             "baseline_tcp": [round(float(v), 6) for v in pose],
         }

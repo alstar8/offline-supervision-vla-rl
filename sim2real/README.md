@@ -51,7 +51,72 @@
 - плейер:
   `openreal2sim/simulation/maniskill/scripts/rc5_replay_rl4vla_npz_viewer.py`
 
+## Доступные сцены (KEY)
+
+Сцены настроены в `config/config_debug.yaml`:
+
+| KEY | Сцена |
+| --- | --- |
+| `airy_table_scene14sep26_left_image` | Новая сцена левой камеры, по умолчанию в `release.v4` |
+| `airi_table_new_empty3_image` | Предыдущая сцена из `release.v3`, сохранена без изменений |
+| `airy_table_scene14sep26_left_image_metric` | Новая сцена с метрической коррекцией масштаба (×1.0915 вокруг камеры) для переноса на реальный робот, см. `assets/scenes/airy_table_scene14sep26_left_image_metric/README.md` |
+
+Новая сцена использует тот же набор из восьми активных объектов и их расстановку
+относительно базы робота, что и предыдущая. Фон, камера и калибровка базы/высоты
+стола у сцен различаются. Результаты проверки: [release.v4](docs/release_v4_scene.md).
+
+Команды Make выполняются **на хосте из каталога `sim2real`**, не внутри контейнера.
+Если настроенный контейнер уже существует, достаточно запустить его без пересборки:
+
+```bash
+docker start sim2real-simulation
+
+# Viewer: новая сцена (также просто make planner)
+make planner KEY=airy_table_scene14sep26_left_image
+
+# Viewer: предыдущая сцена
+make planner KEY=airi_table_new_empty3_image
+
+# Без viewer: новая и предыдущая сцены
+make planner-headless KEY=airy_table_scene14sep26_left_image
+make planner-headless KEY=airi_table_new_empty3_image
+
+# Метрически скорректированная новая сцена (для переноса на реальный робот)
+make planner KEY=airy_table_scene14sep26_left_image_metric
+make planner-headless KEY=airy_table_scene14sep26_left_image_metric
+
+# Выбор объекта независимо от KEY
+make planner KEY=airy_table_scene14sep26_left_image TASK_OBJECT=yellow_cube_ext
+```
+
+Это запуск **proxy planner**, не MPlib. Текущий runner автоматически запускает
+макрос захвата. Без `TASK_OBJECT` цель берётся из `manip_object_id` выбранной
+секции конфига; сейчас для обеих сцен это `blue_cube_ext`.
+
+`SCENE` автоматически определяется как `assets/scenes/$(KEY)/simulation/scene.json`.
+Менять его вручную при выборе KEY не нужно. Явный `SCENE=...` имеет приоритет;
+при таком переопределении соответствие ассетов и калибровки KEY проверяйте отдельно.
+`KEY` выбирает сцену для `planner`/`planner-headless`; `replay` использует данные
+сохранённого NPZ, а не текущий KEY из Makefile.
+
+Материалы кисти для всех KEY задаются в `config/config_debug.yaml`:
+`hand_visual_profiles.rc5_real_matte_v1`, включение через
+`global.simulation.hand_visual_profile: *rc5_real_matte_v1`.
+`plastic`, `pad`, `adapter_green` задают цвет (`base_color`, линейный RGB),
+матовость (`roughness`) и блики (`specular`). Свет и физика от этого не меняются.
+Камера на креплении разделена на `camera_panel` (тёмная передняя панель) и
+`camera_metal` (серебристо-серый корпус, `metallic: 0.8`, `roughness: 0.25`).
+Граница панели задана в `parts.prehand[3].regions` в координатах исходного меша
+до масштаба URDF (мм); количество треугольников проверяется, без fallback.
+`hand_visual_profile: null` возвращает прежний вид; неизвестные звенья или
+ошибочные параметры вызывают явную ошибку, без подмены профиля.
+Новые NPZ сохраняют профиль в runtime-конфиге; replay использует его из записи.
+Старые записи без профиля сохраняют прежний вид кисти.
+Это приближение материалов, не фотореалистичная текстура винтов, тяг и проводов.
+
 ## Быстрый запуск
+
+Для первого развёртывания (если образ/контейнер ещё не подготовлены):
 
 0. Клонировать репозиторий
 

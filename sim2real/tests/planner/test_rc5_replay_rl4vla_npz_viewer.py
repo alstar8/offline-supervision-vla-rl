@@ -176,12 +176,13 @@ def test_load_replay_context_prefers_explicit_config_path_over_embedded_bundle(t
     assert context.task_object_id == "blue_cube_ext"
 
 
-def test_build_env_kwargs_uses_embedded_runtime_config_object_placements(tmp_path: Path):
+@pytest.mark.parametrize('hand_profile', [None, {'name': 'embedded-materials', 'materials': {'plastic': {'roughness': 0.8}}}])
+def test_build_env_kwargs_uses_embedded_runtime_config_object_placements(tmp_path: Path, hand_profile):
     scene_path = tmp_path / "scene.json"
     scene_path.write_text("{}", encoding="utf-8")
     runtime_config = {
         "keys": ["demo_key"],
-        "global": {"simulation": {"robot_uids": "rc5_aero_hand_openr2s_rl"}},
+        "global": {"simulation": {"robot_uids": "rc5_aero_hand_openr2s_rl", "hand_visual_profile": hand_profile}},
         "local": {
             "demo_key": {
                 "simulation": {
@@ -213,6 +214,9 @@ def test_build_env_kwargs_uses_embedded_runtime_config_object_placements(tmp_pat
 
     context = uut._load_replay_context(_make_args(npz_path))
     env_kwargs, sim_cfg, _hand_pose_cfg_path, startup_cfg = uut._build_env_kwargs(context, _make_args(npz_path))
+    assert env_kwargs.get('hand_visual_profile') == hand_profile
+    if hand_profile is not None:
+        assert env_kwargs['hand_visual_profile'] is not sim_cfg['hand_visual_profile']
 
     assert env_kwargs["scene_json_path"] == str(scene_path.resolve())
     assert env_kwargs["manip_object_id"] == "orange_cube_ext"

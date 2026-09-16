@@ -1,5 +1,6 @@
 keys:
   - airy_table_scene14sep26_left_image
+  - airy_table_scene14sep26_left_image_metric
   - airi_table_new_empty3_image
 
 hand_visual_profiles:
@@ -37,6 +38,7 @@ hand_visual_profiles:
       right_base_link: plastic
       right_t_link: plastic
       right_thumb_mcp_link: plastic
+      right_thumb_proximal_link: plastic
       right_thumb_distal_link: plastic
       right_index_proximal_link: plastic
       right_index_middle_link: plastic
@@ -309,20 +311,24 @@ local:
       teleop_profile: rc5_teleop_v1
       lighting_profile_config: config/lighting_profiles.yaml
       lighting_profile: tabletop_legacy_effective_reference_scene14sep26_left
+      # Base yaw rotated by -85.98 deg (50.593 -> -35.387) so sim joint angles equal the real RC5
+      # joints (hover check on the real robot, 2026-09-15). Joint0 axis is base Z, so this is
+      # exactly equivalent to the old joint0 offset; start profiles moved +85.98 deg on joint0
+      # and joint3 is written as +179.52 deg (real robot range, URDF limit now +-360).
       robot_base_pose:
       - 0.49556433594
       - -0.616155178655
       - 0.324685138162
-      - 0.904107770418
+      - 0.95269659488
       - 0
       - 0
-      - 0.427304504387
+      - -0.303923013449
       robot_init_qpos_profiles:
         top:
-        - 0.2853
+        - 1.785934
         - -1.632
         - -1.7735
-        - -3.15
+        - 3.133185
         - -2.75
         - -0.05
         - 0.7843
@@ -342,10 +348,10 @@ local:
         - 0.3501
         - 0.35
         side:
-        - 0.2853
+        - 1.785934
         - -1.632
         - -1.7735
-        - -3.15
+        - 3.133185
         - -2.75
         - 1.570796
         - 1.7453
@@ -656,6 +662,543 @@ local:
           position:
           - -0.216133381444
           - -0.462902579753
+          - 0.0
+          orientation:
+          - 0.999452171616
+          - 0.0
+          - 0.0
+          - 0.033096172764
+          scale: 1.0
+          collision_mode: coacd
+          body_type: dynamic
+          z_extra: 0.0
+      auto_placement: false
+      robot_base_pose_z_auto: false
+      planner_waypoints:
+        enabled: false
+        points:
+        - id: waypoint_001
+          position:
+          - 0.317624779399
+          - -0.125652411876
+          - 0.640489663061
+        - id: waypoint_002
+          position:
+          - 0.10676280113
+          - -0.116582344596
+          - 0.640989663061
+        - id: waypoint_003
+          position:
+          - -0.075544664765
+          - -0.131575939197
+          - 0.640689663061
+        - id: waypoint_004
+          position:
+          - -0.169064385986
+          - -0.261347129153
+          - 0.640789663061
+
+
+  # airy_table_scene14sep26_left_image_metric: airy_table_scene14sep26_left_image scaled by s=1.0915 about the camera centre
+  # [0.055108, -0.936989, 0.885042] (ZED 2i depth, 2026-09-15). Robot base position and object
+  # XY are scaled; grasp offsets, object sizes and base yaw are not. See
+  # assets/scenes/airy_table_scene14sep26_left_image_metric/README.md.
+  airy_table_scene14sep26_left_image_metric:
+    reconstruction:
+      auto_upright_objects: false
+      bg_mesh_target_faces: 500000
+      bg_collision_target_faces: 50000
+      bg_save_quality: 98
+      inpaint_short_side: 1024
+    simulation:
+      physics: default
+      object_material:
+        static_friction: 0.8
+        dynamic_friction: 0.7
+        restitution: 0.0
+      renderer_kwargs:
+        max_num_materials: 50000
+        max_num_textures: 50000
+      planner_object_calibrations:
+        orange_cube_ext:
+          pregrasp_offset_xyz:
+          - -0.003535468875
+          - 0.045766368218
+          - 0.0886
+          descend_offset_xyz:
+          - -0.003535468875
+          - 0.045766368218
+          - 0.0786
+          target_quat:
+          - -0.524541662652
+          - -0.693104403414
+          - 0.429013234946
+          - 0.24578440624
+        green_cube_ext:
+          pregrasp_offset_xyz:
+          - -0.003535468875
+          - 0.045766368218
+          - 0.0886
+          descend_offset_xyz:
+          - -0.003535468875
+          - 0.045766368218
+          - 0.0786
+          target_quat:
+          - -0.524541662652
+          - -0.693104403414
+          - 0.429013234946
+          - 0.24578440624
+        yellow_cube_ext:
+          pregrasp_offset_xyz:
+          - -0.003535468875
+          - 0.045766368218
+          - 0.0886
+          descend_offset_xyz:
+          - -0.003535468875
+          - 0.045766368218
+          - 0.0786
+          target_quat:
+          - -0.524541662652
+          - -0.693104403414
+          - 0.429013234946
+          - 0.24578440624
+        blue_cube_ext:
+          pregrasp_offset_xyz:
+          - -0.003535468875
+          - 0.045766368218
+          - 0.0886
+          descend_offset_xyz:
+          - -0.003535468875
+          - 0.045766368218
+          - 0.0786
+          target_quat:
+          - -0.524541662652
+          - -0.693104403414
+          - 0.429013234946
+          - 0.24578440624
+        white_cube_ext:
+          pregrasp_offset_xyz:
+          - -0.003535468875
+          - 0.045766368218
+          - 0.0886
+          descend_offset_xyz:
+          - -0.003535468875
+          - 0.045766368218
+          - 0.0786
+          target_quat:
+          - -0.524541662652
+          - -0.693104403414
+          - 0.429013234946
+          - 0.24578440624
+        spray_bottle_ext:
+          pregrasp_offset_xyz:
+          - -0.035888326114
+          - 0.087818153298
+          - 0.0886
+          descend_offset_xyz:
+          - -0.035888326114
+          - 0.087818153298
+          - -0.01
+          target_orientation_mode: current_tcp
+        plastic_cup_ext:
+          pregrasp_offset_xyz:
+          - -0.003535468875
+          - 0.045766368218
+          - 0.0886
+          descend_offset_xyz:
+          - -0.003535468875
+          - 0.045766368218
+          - 0.0786
+          target_quat:
+          - -0.524541662652
+          - -0.693104403414
+          - 0.429013234946
+          - 0.24578440624
+        banana_ext:
+          pregrasp_offset_xyz:
+          - -0.003535468875
+          - 0.045766368218
+          - 0.0886
+          descend_offset_xyz:
+          - -0.003535468875
+          - 0.045766368218
+          - 0.0786
+          target_quat:
+          - -0.524541662652
+          - -0.693104403414
+          - 0.429013234946
+          - 0.24578440624
+        tube_ext:
+          pregrasp_offset_xyz:
+          - -0.003535468875
+          - 0.045766368218
+          - 0.0886
+          descend_offset_xyz:
+          - -0.003535468875
+          - 0.045766368218
+          - 0.0786
+          target_quat:
+          - -0.524541662652
+          - -0.693104403414
+          - 0.429013234946
+          - 0.24578440624
+      planner_lift_delta_z: 0.05
+      planner_proxy_xy_step_m: 0.004
+      planner_proxy_z_step_m: 0.002
+      planner_proxy_lift_z_step_m: 0.02
+      planner_proxy_max_stage_steps: 800
+      planner_proxy_pos_tol_m: 0.001
+      planner_proxy_lift_pos_tol_m: 0.01
+      planner_proxy_stall_steps: 60
+      planner_proxy_hold_steps: 1
+      planner_proxy_rot_step_deg: 6.0
+      planner_proxy_rot_tol_deg: 8.0
+      robot_uids: rc5_aero_hand_openr2s_rl
+      control_mode: arm_pd_ee_target_delta_pose_align2_gripper_pd_joint_pos
+      hand_contact_config: config/hand_contact_profiles.yaml
+      hand_contact_profile: rubber_fingertips_v2
+      hand_controller_config: config/hand_controller_profiles.yaml
+      hand_controller_profile: stronger_grasp_v2
+      teleop_profile_config: config/teleop_profiles.yaml
+      teleop_profile: rc5_teleop_v1
+      lighting_profile_config: config/lighting_profiles.yaml
+      lighting_profile: tabletop_clear_shadows
+      # Base yaw rotated by -85.98 deg (50.593 -> -35.387) so sim joint angles equal the real RC5
+      # joints (hover check on the real robot, 2026-09-15). Joint0 axis is base Z, so this is
+      # exactly equivalent to the old joint0 offset; start profiles moved +85.98 deg on joint0
+      # and joint3 is written as +179.52 deg (real robot range, URDF limit now +-360).
+      robot_base_pose:
+      - 0.535866090568
+      - -0.586798868333
+      - 0.27341252229
+      - 0.95269659488
+      - 0
+      - 0
+      - -0.303923013449
+      robot_init_qpos_profiles:
+        top:
+        - 1.785934
+        - -1.632
+        - -1.7735
+        - 3.133185
+        - -2.75
+        - -0.05
+        - 0.7843
+        - 0.3536
+        - 0.2661
+        - 0.2661
+        - 0.0316
+        - 0.1497
+        - 0.439
+        - 0.5261
+        - 0.5262
+        - 0.7011
+        - 0.1958
+        - 0.4374
+        - 0.35
+        - 0.35
+        - 0.3501
+        - 0.35
+        side:
+        - 1.785934
+        - -1.632
+        - -1.7735
+        - 3.133185
+        - -2.75
+        - 1.570796
+        - 1.7453
+        - 0.6519
+        - 0.5137
+        - 0.5278
+        - 0.5137
+        - 0.0605
+        - 0.6519
+        - 0.5137
+        - 0.5278
+        - 0.5137
+        - 0.245
+        - 0.6519
+        - 0.5137
+        - 0.5278
+        - 0.5137
+        - 0.245
+      robot_init_qpos_profile_by_object:
+        orange_cube_ext: top
+        green_cube_ext: top
+        yellow_cube_ext: top
+        blue_cube_ext: top
+        white_cube_ext: top
+        spray_bottle_ext: side
+        plastic_cup_ext: top
+        banana_ext: top
+        tube_ext: top
+      robot_init_qpos:
+      - 0.2853
+      - -1.632
+      - -1.7735
+      - -3.15
+      - -2.75
+      - -0.05
+      - 0.7843
+      - 0.3536
+      - 0.2661
+      - 0.2661
+      - 0.0316
+      - 0.1497
+      - 0.439
+      - 0.5261
+      - 0.5262
+      - 0.7011
+      - 0.1958
+      - 0.4374
+      - 0.35
+      - 0.35
+      - 0.3501
+      - 0.35
+      sim_ground_offset: 1.0
+      settle_steps: 120
+      video_fps: 60
+      object_spawn_clearance: 0.002
+      bg_collision_mode: nonconvex
+      bg_use_decimated_collision_mesh: true
+      bg_collision_mesh: background_registered_collision.glb
+      obj_collision_mode: coacd
+      placement_mode: fixed
+      manip_object_id: blue_cube_ext
+      include_objects:
+      - container_blue_ext
+      - white_cube_ext
+      - orange_cube_ext
+      - green_cube_ext
+      - yellow_cube_ext
+      - blue_cube_ext
+      - spray_bottle_ext
+      - plastic_cup_ext
+      object_placements:
+        plate_ext:
+          mesh_path: /app/assets/object_bank/plate_ext/textured.dae
+          collision_mesh_path: /app/assets/object_bank/plate_ext/collision.obj
+          name: plate
+          task_semantic_name: yellow plate
+          position:
+          - -0.11759921129
+          - -0.630124487405
+          - 0.0
+          orientation:
+          - 0.999452171616
+          - 0.0
+          - 0.0
+          - 0.033096172764
+          scale: 1.5
+          collision_mode: nonconvex
+          body_type: kinematic
+          z_extra: 0.0
+        coke_can_ext:
+          mesh_path: /app/assets/object_bank/coke_can_ext/opened_textured.dae
+          collision_mesh_path: /app/assets/object_bank/coke_can_ext/collision.obj
+          name: coke_can
+          task_semantic_name: coke can
+          position:
+          - -0.240951967957
+          - -0.419523656631
+          - 0.0
+          orientation:
+          - 0.706719408021
+          - 0.706719408021
+          - 0.023402528193
+          - 0.023402528193
+          scale: 1.0
+          collision_mode: coacd
+          body_type: dynamic
+          z_extra: 0.0
+        container_blue_ext:
+          mesh_path: /app/assets/object_bank/container_blue_ext/visual.glb
+          collision_mesh_path: /app/assets/object_bank/container_blue_ext/collision.glb
+          name: container_blue
+          task_semantic_name: blue container
+          position:
+          - -0.320800054763
+          - -0.370122870368
+          - 0.0
+          orientation:
+          - 0.730121936214
+          - 0.0
+          - 0.0
+          - -0.683316879829
+          scale: 0.35
+          collision_mode: nonconvex
+          body_type: kinematic
+          z_extra: 0.0
+        orange_cube_ext:
+          mesh_path: /app/assets/object_bank/orange_cube_ext/visual.glb
+          collision_mesh_path: /app/assets/object_bank/orange_cube_ext/collision.coacd.ply
+          name: orange_cube
+          task_semantic_name: orange cube
+          position:
+          - -0.284576005011
+          - -0.586500450352
+          - 0.0
+          orientation:
+          - 0.999452171616
+          - 0.0
+          - 0.0
+          - 0.033096172764
+          scale: 1.0
+          collision_mode: coacd
+          body_type: dynamic
+          z_extra: 0.0
+        blue_cube_ext:
+          mesh_path: /app/assets/object_bank/blue_cube_ext/visual.glb
+          collision_mesh_path: /app/assets/object_bank/blue_cube_ext/collision.coacd.ply
+          name: blue_cube
+          task_semantic_name: blue cube
+          position:
+          - -0.219289158421
+          - -0.74625630756
+          - 0.0
+          orientation:
+          - 0.999452171616
+          - 0.0
+          - 0.0
+          - 0.033096172764
+          scale: 1.0
+          collision_mode: coacd
+          body_type: dynamic
+          z_extra: 0.0
+        green_cube_ext:
+          mesh_path: /app/assets/object_bank/green_cube_ext/visual.glb
+          collision_mesh_path: /app/assets/object_bank/green_cube_ext/collision.coacd.ply
+          name: green_cube
+          task_semantic_name: green cube
+          position:
+          - 0.049377582431
+          - -0.673748524459
+          - 0.0
+          orientation:
+          - 0.999452171616
+          - 0.0
+          - 0.0
+          - 0.033096172764
+          scale: 1.0
+          collision_mode: coacd
+          body_type: dynamic
+          z_extra: 0.0
+        yellow_cube_ext:
+          mesh_path: /app/assets/object_bank/yellow_cube_ext/visual.glb
+          collision_mesh_path: /app/assets/object_bank/yellow_cube_ext/collision.coacd.ply
+          name: yellow_cube
+          task_semantic_name: yellow cube
+          position:
+          - -0.331810510319
+          - -0.69902180225
+          - 0.0
+          orientation:
+          - 0.999452171616
+          - 0.0
+          - 0.0
+          - 0.033096172764
+          scale: 1.0
+          collision_mode: coacd
+          body_type: dynamic
+          z_extra: 0.0
+        white_cube_ext:
+          mesh_path: /app/assets/object_bank/white_cube_ext/visual.glb
+          collision_mesh_path: /app/assets/object_bank/white_cube_ext/collision.coacd.ply
+          name: white_cube
+          task_semantic_name: white cube
+          position:
+          - 0.042156645918
+          - -0.564837640816
+          - 0.0
+          orientation:
+          - 0.999452171616
+          - 0.0
+          - 0.0
+          - 0.033096172764
+          scale: 1.0
+          collision_mode: coacd
+          body_type: dynamic
+          z_extra: 0.0
+        spray_bottle_ext:
+          mesh_path: /app/assets/object_bank/spray_bottle_ext/visual.glb
+          collision_mesh_path: /app/assets/object_bank/spray_bottle_ext/visual.glb.coacd.ply
+          name: spray_bottle
+          task_semantic_name: spray bottle
+          position:
+          - -0.077705009685
+          - -0.736869090094
+          - 0.0
+          orientation:
+          - 0.999452171616
+          - 0.0
+          - 0.0
+          - 0.033096172764
+          scale: 1.0
+          collision_mode: coacd
+          body_type: dynamic
+          z_extra: 0.0
+        plastic_cup_ext:
+          mesh_path: /app/assets/object_bank/plastic_cup_ext/visual.glb
+          collision_mesh_path: /app/assets/object_bank/plastic_cup_ext/visual.glb.coacd.ply
+          name: plastic_cup
+          task_semantic_name: plastic cup
+          position:
+          - -0.099367819222
+          - -0.410136439165
+          - 0.0
+          orientation:
+          - 0.999452171616
+          - 0.0
+          - 0.0
+          - 0.033096172764
+          scale: 1.0
+          collision_mode: coacd
+          body_type: dynamic
+          z_extra: 0.0
+        tube_ext:
+          mesh_path: /app/assets/object_bank/tube_ext/visual.glb
+          collision_mesh_path: /app/assets/object_bank/tube_ext/collision.coacd.ply
+          name: tube
+          task_semantic_name: tube
+          position:
+          - -0.073975174237
+          - -0.463147693684
+          - 0.0
+          orientation:
+          - 0.683316879829
+          - 0.0
+          - 0.0
+          - 0.730121936214
+          scale: 1.0
+          collision_mode: coacd
+          body_type: dynamic
+          z_extra: 0.0
+        banana_ext:
+          mesh_path: /app/assets/object_bank/banana_ext/textured.glb
+          collision_mesh_path: /app/assets/object_bank/banana_ext/collision.obj
+          name: banana
+          task_semantic_name: banana
+          position:
+          - -0.240951967957
+          - -0.419523656631
+          - 0.0
+          orientation:
+          - 0.730121936214
+          - 0.0
+          - 0.0
+          - -0.683316879829
+          scale: 1.0
+          collision_mode: coacd
+          body_type: dynamic
+          z_extra: 0.0
+        apple_ext:
+          mesh_path: /app/assets/object_bank/apple_ext/textured.vis.glb
+          collision_mesh_path: /app/assets/object_bank/apple_ext/collision.obj
+          name: apple
+          task_semantic_name: apple
+          position:
+          - -0.240951967957
+          - -0.419523656631
           - 0.0
           orientation:
           - 0.999452171616

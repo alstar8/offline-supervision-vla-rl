@@ -49,7 +49,7 @@ HAND_SLOT_NAMES = ('thumb_abd', 'thumb_flex', 'thumb_mcp_ip',
 HAND_SLOT_UPPER = (100.0, 55.0, 90.0, 90.0, 90.0, 90.0, 90.0)
 
 # Hand-tuned presets from rc5_aerohand_teleop.
-HAND_OPEN = [70.0, 20.0, 15.0, 30.0, 30.0, 30.0, 30.0]
+HAND_OPEN = [40.0, 20.0, 15.0, 30.0, 30.0, 30.0, 30.0]
 HAND_CLOSE = [100.0, 55.0, 30.0, 60.0, 60.0, 60.0, 60.0]
 
 # Posture the hand holds while the gripper channel says HOLD, and the one an OPEN
@@ -62,14 +62,15 @@ HAND_CLOSE = [100.0, 55.0, 30.0, 60.0, 60.0, 60.0, 60.0]
 #    15.25, 30.15, 20.05, 1.81, 40.17, 20.06]
 # thumb_abd lowered from the profile's 100 deg (the joint's upper limit) to 70:
 # at 100 the thumb sticks out too far on the real hand.
-HAND_HOLD = [70.0, 3.5, 14.0, 37.4, 29.4, 30.2, 29.4]
+HAND_HOLD = [40.0, 3.5, 14.0, 37.4, 29.4, 30.2, 29.4]
 
 for _name, _v, _hi in zip(HAND_SLOT_NAMES, HAND_HOLD, HAND_SLOT_UPPER):
     if not 0.0 <= _v <= _hi:
         raise ValueError(f'HAND_HOLD[{_name}]={_v} outside the joint limit 0..{_hi}')
 
-# ManiSkill control rate: SimConfig.control_freq default, not overridden in this repo.
-DEFAULT_CONTROL_HZ = 30.0
+# Env control rate: OpenReal2SimEnv reports control_freq = 20 (read from the env on
+# 2026-09-15). The earlier 30 was a guess and made replays run 1.5x too fast.
+DEFAULT_CONTROL_HZ = 20.0
 
 # Gripper channel is ternary: |v| <= eps -> hold, v > eps -> open, v < -eps -> close.
 # Mirrors RCPresetHandController.set_action, and the epsilon must match the sim's

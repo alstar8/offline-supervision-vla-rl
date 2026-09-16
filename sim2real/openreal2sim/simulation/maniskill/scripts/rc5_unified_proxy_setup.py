@@ -403,6 +403,7 @@ def load_runner_config(args):
         hand_controller=None,
         cameras_config=copy.deepcopy(DEFAULT_CAMERAS_CONFIG),
         lighting_config=None,
+        hand_visual_profile=None,
         lighting_profile_config=None,
         lighting_profile=None,
         robot_base_pose=None,
@@ -512,6 +513,7 @@ def load_runner_config(args):
         config_overrides["arm_controller"] = pick("arm_controller", None)
         config_overrides["hand_controller"] = pick("hand_controller", None)
         config_overrides["lighting_config"] = pick("lighting", None)
+        config_overrides["hand_visual_profile"] = copy.deepcopy(pick("hand_visual_profile", None))
         config_overrides["lighting_profile_config"] = pick("lighting_profile_config", None)
         config_overrides["lighting_profile"] = pick("lighting_profile", None)
         config_overrides["robot_base_pose"] = pick("robot_base_pose", None)
@@ -943,6 +945,7 @@ def openreal2sim_env_kwargs_from_config(args, config_overrides, *, render_mode="
         "auto_placement": config_overrides["auto_placement"],
         "cameras_config": config_overrides["cameras_config"],
         "lighting_config": config_overrides["lighting_config"],
+        "hand_visual_profile": config_overrides.get("hand_visual_profile"),
         "scene_z_offset": config_overrides["scene_z_offset"],
         "sim_ground_offset": config_overrides["sim_ground_offset"],
         "object_spawn_clearance": config_overrides["object_spawn_clearance"],
